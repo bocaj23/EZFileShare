@@ -1,2 +1,2 @@
 # EZFileShare
- ur mom
+ Dependencies: OpenSSL
