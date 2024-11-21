@@ -8,7 +8,7 @@
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 
-//IN PROGRESS
+// IN PROGRESS
 
 // Need certificate (server.crt) and a private key (server.key)
 // Command to generate: openssl req -x509 -newkey rsa:4096 -keyout server.key -out server.crt -days 365 -nodes
@@ -17,10 +17,12 @@
 #define SERVER_IP "127.0.0.1"
 #define PORT 4443
 #define BUFFER_SIZE 1024
-#define FILE_TO_SEND "file_to_send.txt"
 
 // Global flag for termination
 volatile atomic_int stop_flag = 0;
+volatile atomic_int ready_to_transfer = 0;
+pthread_mutex_t transfer_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t transfer_cond = PTHREAD_COND_INITIALIZER;
 
 // Function declarations
 void initialize_winsock() {
@@ -59,7 +61,6 @@ SSL_CTX *create_client_context() {
 }
 
 void configure_client_context(SSL_CTX *ctx) {
-    // Load the trusted CA certificate for verifying the server
     if (SSL_CTX_load_verify_locations(ctx, "server.crt", NULL) <= 0) {
         ERR_print_errors_fp(stderr);
         exit(EXIT_FAILURE);
@@ -82,7 +83,6 @@ SSL_CTX *create_server_context() {
 }
 
 void configure_server_context(SSL_CTX *ctx) {
-    // Set the server's certificate and private key
     if (SSL_CTX_use_certificate_file(ctx, "server.crt", SSL_FILETYPE_PEM) <= 0) {
         ERR_print_errors_fp(stderr);
         exit(EXIT_FAILURE);
@@ -93,6 +93,15 @@ void configure_server_context(SSL_CTX *ctx) {
     }
 }
 
+int file_exists(const char *file_path) {
+    FILE *file = fopen(file_path, "rb");
+    if (file) {
+        fclose(file);
+        return 1; // File exists
+    }
+    return 0; // File does not exist
+}
+
 void send_file(SSL *ssl, const char *file_path) {
     FILE *file = fopen(file_path, "rb");
     if (!file) {
@@ -100,12 +109,10 @@ void send_file(SSL *ssl, const char *file_path) {
         return;
     }
 
-    // Get file size
     fseek(file, 0, SEEK_END);
     long file_size = ftell(file);
     fseek(file, 0, SEEK_SET);
 
-    // Send file size
     printf("Sending file size: %ld bytes\n", file_size);
     if (SSL_write(ssl, &file_size, sizeof(file_size)) <= 0) {
         ERR_print_errors_fp(stderr);
@@ -113,7 +120,6 @@ void send_file(SSL *ssl, const char *file_path) {
         return;
     }
 
-    // Send file data
     char buffer[BUFFER_SIZE];
     size_t bytes_read;
     while ((bytes_read = fread(buffer, 1, sizeof(buffer), file)) > 0) {
@@ -129,7 +135,6 @@ void send_file(SSL *ssl, const char *file_path) {
 }
 
 void receive_file(SSL *ssl, const char *output_path) {
-    // Receive file size
     long expected_file_size;
     if (SSL_read(ssl, &expected_file_size, sizeof(expected_file_size)) <= 0) {
         ERR_print_errors_fp(stderr);
@@ -137,22 +142,17 @@ void receive_file(SSL *ssl, const char *output_path) {
     }
     printf("Receiving file of size: %ld bytes\n", expected_file_size);
 
-    // Open file for writing
     FILE *file = fopen(output_path, "wb");
     if (!file) {
         perror("Unable to open file");
         return;
     }
 
-    // Receive file data
     char buffer[BUFFER_SIZE];
     long bytes_received = 0;
     while (bytes_received < expected_file_size) {
         int bytes = SSL_read(ssl, buffer, sizeof(buffer));
         if (bytes <= 0) {
-            printf("Bytes: %d\n", bytes);
-            int err = SSL_get_error(ssl, -1);
-            fprintf(stderr, "SSL_read failed. Error code: %d\n", err);
             ERR_print_errors_fp(stderr);
             fclose(file);
             return;
@@ -162,23 +162,7 @@ void receive_file(SSL *ssl, const char *output_path) {
     }
 
     fclose(file);
-
-    // Verify file size
-    printf("File received successfully. Verifying size...\n");
-    FILE *received_file = fopen(output_path, "rb");
-    if (!received_file) {
-        perror("Unable to open received file for verification");
-        return;
-    }
-    fseek(received_file, 0, SEEK_END);
-    long actual_file_size = ftell(received_file);
-    fclose(received_file);
-
-    if (actual_file_size == expected_file_size) {
-        printf("File size verification succeeded. File size: %ld bytes.\n", actual_file_size);
-    } else {
-        printf("File size mismatch! Expected: %ld bytes, Received: %ld bytes.\n", expected_file_size, actual_file_size);
-    }
+    printf("File received successfully.\n");
 }
 
 // Server thread function
@@ -189,20 +173,12 @@ void *server_thread(void *arg) {
     SSL_CTX *ctx;
     SSL *ssl;
 
-    // Initialize Winsock and OpenSSL
     initialize_winsock();
     initialize_openssl();
 
-    // Create and configure SSL context
     ctx = create_server_context();
-    if (!ctx) {
-        fprintf(stderr, "Failed to create SSL context\n");
-        pthread_exit(NULL); // Terminate thread safely
-    }
-
     configure_server_context(ctx);
 
-    // Create socket
     sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock == INVALID_SOCKET) {
         perror("Unable to create socket");
@@ -212,7 +188,6 @@ void *server_thread(void *arg) {
         pthread_exit(NULL);
     }
 
-    // Bind to port
     addr.sin_family = AF_INET;
     addr.sin_port = htons(PORT);
     addr.sin_addr.s_addr = INADDR_ANY;
@@ -226,7 +201,6 @@ void *server_thread(void *arg) {
         pthread_exit(NULL);
     }
 
-    // Listen for connections
     if (listen(sock, 1) == SOCKET_ERROR) {
         perror("Unable to listen");
         closesocket(sock);
@@ -238,70 +212,70 @@ void *server_thread(void *arg) {
 
     printf("Server is running and waiting for connections...\n");
 
-    fd_set read_fds;
-    struct timeval timeout;
-
-    while (!stop_flag) {
-        FD_ZERO(&read_fds);
-        FD_SET(sock, &read_fds);
-
-        timeout.tv_sec = 1;  // Check every 1 second
-        timeout.tv_usec = 0;
-
-        int activity = select(sock + 1, &read_fds, NULL, NULL, &timeout);
-
-        if (activity > 0 && FD_ISSET(sock, &read_fds)) {
-            len = sizeof(client_addr);
-            int client_sock = accept(sock, (struct sockaddr *)&client_addr, &len);
-            if (client_sock == INVALID_SOCKET) {
-                if (stop_flag) break; // Exit cleanly if stop_flag is set
-                perror("Accept failed");
-                continue;
-            }
-
-            // SSL handshake
-            ssl = SSL_new(ctx);
-            SSL_set_fd(ssl, client_sock);
-            if (SSL_accept(ssl) <= 0) {
-                ERR_print_errors_fp(stderr);
-            } else {
-                printf("Client connected. Receiving file...\n");
-                receive_file(ssl, "received_file.txt");
-            }
-
-            // Clean up SSL and socket
-            SSL_shutdown(ssl);
-            SSL_free(ssl);
-            closesocket(client_sock);
-        }
+    len = sizeof(client_addr);
+    int client_sock = accept(sock, (struct sockaddr *)&client_addr, &len);
+    if (client_sock == INVALID_SOCKET) {
+        perror("Accept failed");
+        closesocket(sock);
+        SSL_CTX_free(ctx);
+        cleanup_openssl();
+        cleanup_winsock();
+        pthread_exit(NULL);
     }
 
-    // Clean up
+    ssl = SSL_new(ctx);
+    SSL_set_fd(ssl, client_sock);
+    if (SSL_accept(ssl) <= 0) {
+        ERR_print_errors_fp(stderr);
+        closesocket(client_sock);
+        SSL_CTX_free(ctx);
+        cleanup_openssl();
+        cleanup_winsock();
+        pthread_exit(NULL);
+    }
+
+    pthread_mutex_lock(&transfer_mutex);
+    while (!ready_to_transfer) {
+        pthread_cond_wait(&transfer_cond, &transfer_mutex);
+    }
+    pthread_mutex_unlock(&transfer_mutex);
+
+    receive_file(ssl, "received_file.txt");
+
+    SSL_shutdown(ssl);
+    SSL_free(ssl);
+    closesocket(client_sock);
     closesocket(sock);
     SSL_CTX_free(ctx);
     cleanup_openssl();
     cleanup_winsock();
-
-    pthread_exit(NULL); // Explicit termination
-    return NULL;        // Fallback for compiler satisfaction
+    pthread_exit(NULL);
 }
 
 // Client function
 void client() {
+
+    char file_path[BUFFER_SIZE];
+    printf("Enter the file path to send: ");
+    fgets(file_path, sizeof(file_path), stdin);
+    file_path[strcspn(file_path, "\n")] = '\0';  // Remove newline
+
+    if (!file_exists(file_path)) {
+        fprintf(stderr, "File does not exist: %s\n", file_path);
+        return;
+    }
+
     SOCKET sock;
     struct sockaddr_in server_addr;
     SSL_CTX *ctx;
     SSL *ssl;
 
-    // Initialize libraries
     initialize_winsock();
     initialize_openssl();
 
-    // Create and configure SSL context
     ctx = create_client_context();
     configure_client_context(ctx);
 
-    // Create socket
     sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock == INVALID_SOCKET) {
         perror("Unable to create socket");
@@ -310,8 +284,7 @@ void client() {
         return;
     }
 
-    // Set up server address
-    memset(&server_addr, 0, sizeof(server_addr));  // Initialize the structure to zero
+    memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(PORT);
     if (inet_pton(AF_INET, SERVER_IP, &server_addr.sin_addr) <= 0) {
@@ -322,7 +295,6 @@ void client() {
         return;
     }
 
-    // Connect to server
     if (connect(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) == SOCKET_ERROR) {
         perror("Connection failed");
         closesocket(sock);
@@ -331,7 +303,6 @@ void client() {
         return;
     }
 
-    // Establish SSL connection
     ssl = SSL_new(ctx);
     SSL_set_fd(ssl, sock);
 
@@ -345,12 +316,13 @@ void client() {
         return;
     }
 
-    printf("Connected to server with TLS. Sending file...\n");
+    pthread_mutex_lock(&transfer_mutex);
+    ready_to_transfer = 1;
+    pthread_cond_signal(&transfer_cond);
+    pthread_mutex_unlock(&transfer_mutex);
 
-    // Send the file
-    send_file(ssl, FILE_TO_SEND);
+    send_file(ssl, file_path);
 
-    // Clean up
     SSL_shutdown(ssl);
     SSL_free(ssl);
     closesocket(sock);
