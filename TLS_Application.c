@@ -150,15 +150,31 @@ void receive_file(SSL *ssl, const char *output_path) {
     while (bytes_received < expected_file_size) {
         int bytes = SSL_read(ssl, buffer, sizeof(buffer));
         if (bytes <= 0) {
-            printf("Bytes: %d\n", bytes);
-            int err = SSL_get_error(ssl, -1);
-            fprintf(stderr, "SSL_read failed. Error code: %d\n", err);
-            ERR_print_errors_fp(stderr);
+            int err = SSL_get_error(ssl, bytes);
+            printf("Bytes: %d, Error: %d\n", bytes, err);
+            switch(err) {
+                case SSL_ERROR_WANT_READ:
+                    fprintf(stderr, "SSL_ERROR_WANT_READ\n");
+                    break;
+                case SSL_ERROR_WANT_WRITE:
+                    fprintf(stderr, "SSL_ERROR_WANT_WRITE\n");
+                    break;
+                case SSL_ERROR_ZERO_RETURN:
+                    fprintf(stderr, "SSL_ERROR_ZERO_RETURN - Connection closed\n");
+                    break;
+                case SSL_ERROR_SYSCALL:
+                    fprintf(stderr, "SSL_ERROR_SYSCALL - IO error: %d\n", WSAGetLastError());
+                    break;
+                default:
+                    fprintf(stderr, "SSL_read failed. Error code: %d\n", err);
+                    ERR_print_errors_fp(stderr);
+            }
             fclose(file);
             return;
         }
         fwrite(buffer, 1, bytes, file);
         bytes_received += bytes;
+        printf("Received %ld of %ld bytes\n", bytes_received, expected_file_size);
     }
 
     fclose(file);
