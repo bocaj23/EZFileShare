@@ -20,7 +20,7 @@ def create_tls_context():
     return context
 
 
-def server(host, port, server_log_callback):
+def server(host, port, download_dir, server_log_callback):
     """Runs the P2P server."""
     context = create_tls_context()
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
@@ -31,10 +31,10 @@ def server(host, port, server_log_callback):
             while True:
                 conn, addr = secure_socket.accept()
                 server_log_callback(f"Connection established with {addr}")
-                threading.Thread(target=handle_client, args=(conn, server_log_callback)).start()
+                threading.Thread(target=handle_client, args=(conn, download_dir, server_log_callback)).start()
 
 
-def handle_client(conn, log_callback):
+def handle_client(conn, download_dir, log_callback):
     """Handles an incoming client connection."""
     try:
         filename = conn.recv(BUFFER_SIZE).decode()
@@ -42,14 +42,15 @@ def handle_client(conn, log_callback):
             return
 
         log_callback(f"Receiving file: {filename}")
-        with open(filename, "wb") as f:
+        file_path = os.path.join(download_dir, filename)
+        with open(file_path, "wb") as f:
             while True:
                 data = conn.recv(BUFFER_SIZE)
                 if not data:
                     break
                 f.write(data)
 
-        log_callback(f"File {filename} received successfully.")
+        log_callback(f"File {filename} received successfully to {file_path}.")
     except Exception as e:
         log_callback(f"Error: {e}")
     finally:
@@ -80,30 +81,34 @@ def client(host, port, filename, client_log_callback):
 class P2PApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("P2P File Transfer")
+        self.root.title("EZFileShare")
 
         # Server Section
-        tk.Label(root, text="Server").grid(row=0, column=0, padx=10, pady=5, sticky="w")
+        tk.Label(root, text="Receive").grid(row=0, column=0, padx=10, pady=5, sticky="w")
         self.server_log = tk.Text(root, height=10, width=50, state="disabled")
         self.server_log.grid(row=1, column=0, padx=10, pady=5)
-        tk.Button(root, text="Start Server", command=self.start_server).grid(row=2, column=0, padx=10, pady=5)
+        tk.Button(root, text="Start", command=self.start_server).grid(row=2, column=0, padx=10, pady=5)
+        tk.Button(root, text="Select Download Directory", command=self.select_download_dir).grid(row=3, column=0, padx=10, pady=5)
 
         # Client Section
-        tk.Label(root, text="Client").grid(row=0, column=1, padx=10, pady=5, sticky="w")
+        tk.Label(root, text="Send").grid(row=0, column=1, padx=10, pady=5, sticky="w")
         self.client_log = tk.Text(root, height=10, width=50, state="disabled")
         self.client_log.grid(row=1, column=1, padx=10, pady=5)
         tk.Button(root, text="Select File & Send", command=self.select_and_send_file).grid(row=2, column=1, padx=10, pady=5)
 
         # Host and Port Configuration
-        tk.Label(root, text="Host:").grid(row=3, column=0, padx=10, pady=5, sticky="e")
+        tk.Label(root, text="Host:").grid(row=4, column=0, padx=10, pady=5, sticky="e")
         self.host_entry = tk.Entry(root)
         self.host_entry.insert(0, DEFAULT_HOST)
-        self.host_entry.grid(row=3, column=1, padx=10, pady=5, sticky="w")
+        self.host_entry.grid(row=4, column=1, padx=10, pady=5, sticky="w")
 
-        tk.Label(root, text="Port:").grid(row=4, column=0, padx=10, pady=5, sticky="e")
+        tk.Label(root, text="Port:").grid(row=5, column=0, padx=10, pady=5, sticky="e")
         self.port_entry = tk.Entry(root)
         self.port_entry.insert(0, str(DEFAULT_PORT))
-        self.port_entry.grid(row=4, column=1, padx=10, pady=5, sticky="w")
+        self.port_entry.grid(row=5, column=1, padx=10, pady=5, sticky="w")
+
+        # Default download directory
+        self.download_dir = os.getcwd()
 
     def log_message(self, widget, message):
         """Logs a message to a specific Text widget."""
@@ -136,8 +141,15 @@ class P2PApp:
         """Starts the server in a separate thread."""
         host, port = self.get_host_and_port()
         if host and port:
-            threading.Thread(target=server, args=(host, port, self.server_log_callback), daemon=True).start()
-            self.server_log_callback(f"Server started on {host}:{port}.")
+            threading.Thread(target=server, args=(host, port, self.download_dir, self.server_log_callback), daemon=True).start()
+            self.server_log_callback(f"Server started on {host}:{port}. Files will be saved to {self.download_dir}.")
+
+    def select_download_dir(self):
+        """Opens a directory selection dialog to choose the download directory."""
+        selected_dir = filedialog.askdirectory(title="Select Download Directory")
+        if selected_dir:
+            self.download_dir = selected_dir
+            self.server_log_callback(f"Download directory set to: {self.download_dir}")
 
     def select_and_send_file(self):
         """Opens a file dialog and sends the selected file."""
