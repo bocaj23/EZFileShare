@@ -4,6 +4,7 @@ import ssl
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox
+import queue
 
 # Constants
 DEFAULT_HOST = '127.0.0.1'
@@ -20,26 +21,48 @@ def create_tls_context():
     return context
 
 
-def server(host, port, download_dir, server_log_callback):
-    """Runs the P2P server."""
+def server(host, port, command_queue, server_log_callback):
+    """Runs the P2P server with a command queue for dynamic behavior."""
     context = create_tls_context()
+    current_dir = {"download_dir": os.getcwd()}  # Shared state
+
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
         server_socket.bind((host, port))
         server_socket.listen(5)
         server_log_callback(f"Server listening on {host}:{port}")
         with context.wrap_socket(server_socket, server_side=True) as secure_socket:
             while True:
-                conn, addr = secure_socket.accept()
-                server_log_callback(f"Connection established with {addr}")
-                threading.Thread(target=handle_client, args=(conn, download_dir, server_log_callback)).start()
+                # Process commands from the queue
+                try:
+                    while not command_queue.empty():
+                        command, value = command_queue.get_nowait()
+                        if command == "set_download_dir":
+                            current_dir["download_dir"] = value
+                            server_log_callback(f"Download directory changed to: {value}")
+                except queue.Empty:
+                    pass
+
+                # Accept client connections
+                try:
+                    conn, addr = secure_socket.accept()
+                    server_log_callback(f"Connection established with {addr}")
+                    threading.Thread(
+                        target=handle_client, 
+                        args=(conn, current_dir, server_log_callback)
+                    ).start()
+                except ssl.SSLError as e:
+                    server_log_callback(f"SSL error: {e}")
 
 
-def handle_client(conn, download_dir, log_callback):
+def handle_client(conn, current_dir, log_callback):
     """Handles an incoming client connection."""
     try:
         filename = conn.recv(BUFFER_SIZE).decode()
         if not filename:
             return
+
+        # Get the latest download directory
+        download_dir = current_dir["download_dir"]
 
         log_callback(f"Receiving file: {filename}")
         file_path = os.path.join(download_dir, filename)
@@ -82,6 +105,9 @@ class P2PApp:
     def __init__(self, root):
         self.root = root
         self.root.title("EZFileShare")
+
+        # Command queue for server
+        self.command_queue = queue.Queue()
 
         # Server Section
         tk.Label(root, text="Receive").grid(row=0, column=0, padx=10, pady=5, sticky="w")
@@ -141,7 +167,7 @@ class P2PApp:
         """Starts the server in a separate thread."""
         host, port = self.get_host_and_port()
         if host and port:
-            threading.Thread(target=server, args=(host, port, self.download_dir, self.server_log_callback), daemon=True).start()
+            threading.Thread(target=server, args=(host, port, self.command_queue, self.server_log_callback), daemon=True).start()
             self.server_log_callback(f"Server started on {host}:{port}. Files will be saved to {self.download_dir}.")
 
     def select_download_dir(self):
@@ -149,6 +175,7 @@ class P2PApp:
         selected_dir = filedialog.askdirectory(title="Select Download Directory")
         if selected_dir:
             self.download_dir = selected_dir
+            self.command_queue.put(("set_download_dir", selected_dir))
             self.server_log_callback(f"Download directory set to: {self.download_dir}")
 
     def select_and_send_file(self):
