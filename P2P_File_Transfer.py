@@ -5,6 +5,7 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import queue
+import zlib
 
 # Constants
 DEFAULT_HOST = '127.0.0.1'
@@ -55,17 +56,20 @@ def server(host, port, command_queue, server_log_callback):
 
 
 def handle_client(conn, current_dir, log_callback):
-    """Handles an incoming client connection."""
+    """Handles an incoming client connection with file integrity check."""
     try:
-        filename = conn.recv(BUFFER_SIZE).decode()
-        if not filename:
+        # Receive the filename and checksum
+        metadata = conn.recv(BUFFER_SIZE).decode()
+        if not metadata:
             return
-
-        # Get the latest download directory
-        download_dir = current_dir["download_dir"]
+        filename, expected_checksum = metadata.split("|")
+        expected_checksum = int(expected_checksum)
 
         log_callback(f"Receiving file: {filename}")
+        download_dir = current_dir["download_dir"]
         file_path = os.path.join(download_dir, filename)
+
+        # Receive the file data
         with open(file_path, "wb") as f:
             while True:
                 data = conn.recv(BUFFER_SIZE)
@@ -73,15 +77,23 @@ def handle_client(conn, current_dir, log_callback):
                     break
                 f.write(data)
 
-        log_callback(f"File {filename} received successfully to {file_path}.")
+        # Calculate the checksum of the received file
+        with open(file_path, "rb") as f:
+            file_data = f.read()
+            actual_checksum = zlib.crc32(file_data)
+
+        # Verify the checksum
+        if actual_checksum == expected_checksum:
+            log_callback(f"File {filename} received successfully to {file_path} (Checksum Verified).")
+        else:
+            log_callback(f"File {filename} received to {file_path}, but checksum mismatch! Expected: {expected_checksum}, Got: {actual_checksum}")
     except Exception as e:
         log_callback(f"Error: {e}")
     finally:
         conn.close()
 
-
 def client(host, port, filename, client_log_callback):
-    """Runs the P2P client to send a file."""
+    """Runs the P2P client to send a file with integrity verification."""
     context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
     context.load_verify_locations(CERTFILE)
 
@@ -90,8 +102,15 @@ def client(host, port, filename, client_log_callback):
             with context.wrap_socket(sock, server_hostname=host) as secure_socket:
                 client_log_callback(f"Connected to {host}:{port}")
 
-                secure_socket.sendall(os.path.basename(filename).encode())
+                # Calculate the file's CRC checksum
+                with open(filename, "rb") as f:
+                    file_data = f.read()
+                    checksum = zlib.crc32(file_data)
 
+                # Send the filename and checksum
+                secure_socket.sendall(f"{os.path.basename(filename)}|{checksum}".encode())
+
+                # Send the file content
                 with open(filename, "rb") as f:
                     while chunk := f.read(BUFFER_SIZE):
                         secure_socket.sendall(chunk)
