@@ -1,2 +1,0 @@
-# EZFileShare
- Dependencies: OpenSSL
