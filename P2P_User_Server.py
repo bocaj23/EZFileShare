@@ -7,7 +7,7 @@ import tkinter as tk
 # Constants
 HOST = '127.0.0.1'
 PORT = 5000
-USER_DATA_FILE = "data.json"
+USER_DATA_FILE = "data.json" # Stored User Data
 BUFFER_SIZE = 1024
 CERTFILE = "server.crt"
 KEYFILE = "server.key"
