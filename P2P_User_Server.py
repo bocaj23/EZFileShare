@@ -35,9 +35,15 @@ def load_user_data():
             return json.load(f)
     except FileNotFoundError:
         server_log_callback(f"User data file {USER_DATA_FILE} not found. Creating a default one.")
-        default_data = {"admin": "password"}
+        default_data = {
+            "admin": {
+                "password": "password",
+                "ip": "127.0.0.1",
+                "port": 5001
+            }
+        }
         with open(USER_DATA_FILE, "w") as f:
-            json.dump(default_data, f)
+            json.dump(default_data, f, indent=4)
         return default_data
     except json.JSONDecodeError:
         server_log_callback(f"Error decoding {USER_DATA_FILE}. Ensure it is valid JSON.")
@@ -49,13 +55,45 @@ def handle_login_request(conn, data):
     """Handles login requests from the client."""
     try:
         username, password = data.split("|")
-        if username in USER_DATABASE and USER_DATABASE[username] == password:
-            conn.sendall(b"LOGIN_SUCCESS")
+        user_data = USER_DATABASE.get(username)
+
+        if user_data and user_data["password"] == password:
+            # Include IP and port in the response if needed
+            response = f"LOGIN_SUCCESS"
+            conn.sendall(response.encode())
         else:
             conn.sendall(b"LOGIN_FAIL")
     except Exception as e:
         conn.sendall(b"LOGIN_ERROR")
         server_log_callback(f"Error during login request handling: {e}")
+
+def handle_update_request(conn, message):
+    """Handles update requests to modify user data."""
+    try:
+        # Parse the update message (format: update|<username>|<ip>|<port>)
+        parts = message.split("|")
+        if len(parts) != 4 or parts[0] != "update":
+            conn.sendall(b"INVALID_UPDATE_REQUEST")
+            return
+
+        _, username, ip, port = parts
+
+        if username in USER_DATABASE:
+            # Update user data
+            USER_DATABASE[username]["ip"] = ip
+            USER_DATABASE[username]["port"] = int(port)
+
+            # Save the updated user data to file
+            with open(USER_DATA_FILE, "w") as f:
+                json.dump(USER_DATABASE, f, indent=4)
+
+            server_log_callback(f"User {username}'s data updated: IP={ip}, PORT={port}")
+            conn.sendall(b"UPDATE_SUCCESS")
+        else:
+            conn.sendall(b"USER_NOT_FOUND")
+    except Exception as e:
+        server_log_callback(f"Error handling update request: {e}")
+        conn.sendall(b"UPDATE_ERROR")
 
 def handle_client(conn, addr):
     """Handles an incoming client connection with support for persistent connections."""
@@ -74,6 +112,7 @@ def handle_client(conn, addr):
 
                 elif request.startswith("update|"):  # Handle periodic updates
                     server_log_callback(f"Periodic update received: {request}")
+                    handle_update_request(conn, request)
                     conn.sendall(b"UPDATE_SUCCESS")
 
                 elif request == "DISCONNECT":  # Handle client-initiated disconnect
