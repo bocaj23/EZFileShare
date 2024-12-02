@@ -3,6 +3,7 @@ import threading
 import json
 import ssl
 import tkinter as tk
+from threading import Lock
 
 # Constants
 HOST = '127.0.0.1'
@@ -15,6 +16,8 @@ CA_CRT = "ca.crt"
 
 server_socket = None
 server_running = False
+active_users = {}
+active_users_lock = Lock()
 
 def log_message(widget, message):
     """Logs a message to a specific Text widget."""
@@ -95,34 +98,151 @@ def handle_update_request(conn, message):
         server_log_callback(f"Error handling update request: {e}")
         conn.sendall(b"UPDATE_ERROR")
 
+def handle_add_friend_request(sender, recipient):
+    """Handles an add friend request."""
+    try:
+        with active_users_lock:
+            if recipient in active_users:
+                recipient_conn = active_users[recipient]["conn"]
+                # Forward the friend request
+                friend_request_message = f"FRIEND_REQUEST|{sender}|{recipient}"
+                recipient_conn.sendall(friend_request_message.encode())
+                server_log_callback(f"Friend request from {sender} forwarded to {recipient}.")
+            else:
+                sender_conn = active_users[sender]["conn"]
+                sender_conn.sendall(b"FRIEND_REQUEST_FAIL|Recipient not online.")
+                server_log_callback(f"Failed to send friend request from {sender} to {recipient}: Recipient not online.")
+    except KeyError:
+        server_log_callback(f"Error: User {sender} or {recipient} is not active.")
+    except Exception as e:
+        server_log_callback(f"Error handling friend request from {sender} to {recipient}: {e}")
+
+def handle_friend_response(message):
+    """Handles a friend request response with the format FRIEND_REQUEST_ACCEPT|{sender}|{recipient} 
+    or FRIEND_REQUEST_DECLINE|{sender}|{recipient}."""
+    try:
+        # Parse the incoming message
+        parts = message.split("|")
+        if len(parts) < 3:
+            server_log_callback(f"Invalid message format: {message}")
+            return
+
+        action, sender, recipient = parts[:3]
+
+        # Ensure the action is valid
+        if action not in ("FRIEND_REQUEST_ACCEPT", "FRIEND_REQUEST_DECLINE"):
+            server_log_callback(f"Invalid action in message: {action}")
+            return
+
+        sender_conn = None
+        recipient_conn = None
+
+        # Access active users safely
+        with active_users_lock:
+            if sender in active_users:
+                sender_conn = active_users[sender]["conn"]
+            else:
+                server_log_callback(f"Sender {sender} is not online. Cannot forward response.")
+                return
+
+            if recipient in active_users:
+                recipient_conn = active_users[recipient]["conn"]
+            else:
+                server_log_callback(f"Recipient {recipient} is not online. Cannot forward response.")
+                return
+
+        # Handle ACCEPT or DECLINE responses
+        if action == "FRIEND_REQUEST_ACCEPT":
+            try:
+                # Fetch sender's and recipient's information from data.json
+                with open("data.json", "r") as user_file:
+                    user_data = json.load(user_file)
+                    sender_data = user_data.get(sender)
+                    recipient_data = user_data.get(recipient)
+
+                if sender_data and recipient_data:
+                    sender_ip = sender_data["ip"]
+                    sender_port = sender_data["port"]
+                    recipient_ip = recipient_data["ip"]
+                    recipient_port = recipient_data["port"]
+
+                    # Notify the sender with recipient's information
+                    sender_response = f"FRIEND_REQUEST_ACCEPTED|{sender}|{recipient}|{recipient_ip}|{recipient_port}"
+                    sender_conn.sendall(sender_response.encode())
+                    server_log_callback(f"Friend request accepted by {recipient}. Info sent to {sender}.")
+
+                    # Notify the recipient with sender's information
+                    recipient_response = f"FRIEND_REQUEST_ACCEPTED|{sender}|{recipient}|{sender_ip}|{sender_port}"
+                    recipient_conn.sendall(recipient_response.encode())
+                    server_log_callback(f"Sender {sender}'s info sent to {recipient}.")
+                else:
+                    error_message = f"FRIEND_REQUEST_FAIL|{sender}|Recipient or sender data not found"
+                    sender_conn.sendall(error_message.encode())
+            except Exception as e:
+                server_log_callback(f"Error reading user data or sending response: {e}")
+
+        elif action == "FRIEND_REQUEST_DECLINE":
+            try:
+                # Notify the sender of the declined request
+                response_message = f"FRIEND_REQUEST_DECLINED|{sender}|{recipient}"
+                sender_conn.sendall(response_message.encode())
+                server_log_callback(f"Friend request declined by {recipient}. Notification sent to {sender}.")
+            except Exception as e:
+                server_log_callback(f"Error sending decline notification: {e}")
+
+    except Exception as e:
+        server_log_callback(f"Error handling friend request response: {e}")
+
 def handle_client(conn, addr):
     """Handles an incoming client connection with support for persistent connections."""
+    username = None
     try:
         server_log_callback(f"Connection established with {addr}")
 
-        while True:  # Keep the connection alive for multiple requests
+        while True:
             try:
                 request = conn.recv(BUFFER_SIZE).decode()
-                if not request:  # Client disconnected
+                if not request:
                     break
 
                 if request == "LOGIN":
                     login_data = conn.recv(BUFFER_SIZE).decode()
-                    handle_login_request(conn, login_data)
+                    username, password = login_data.split("|")
 
-                elif request.startswith("update|"):  # Handle periodic updates
+                    if username in USER_DATABASE and USER_DATABASE[username]["password"] == password:
+                        # Successful login
+                        with active_users_lock:
+                            active_users[username] = {"ip": addr[0], "port": addr[1], "conn": conn}
+                        server_log_callback(f"User {username} logged in from {addr}")
+                        conn.sendall(b"LOGIN_SUCCESS")
+                    else:
+                        conn.sendall(b"LOGIN_FAIL")
+
+                elif request.startswith("UPDATE|"):  # Handle periodic updates
                     server_log_callback(f"Periodic update received: {request}")
                     handle_update_request(conn, request)
-                    conn.sendall(b"UPDATE_SUCCESS")
+
+                elif request.startswith("ADD_FRIEND|"):  # Handle add friend requests
+                    sender, recipient = request.split("|")[1:]
+                    handle_add_friend_request(sender, recipient)
+
+                elif request.startswith("FRIEND_REQUEST_ACCEPT|" or "FRIEND_REQUEST_DECLINE|"):  # Handle friend request responses
+                    #conn.sendall(b"Friend Request Received")
+                    handle_friend_response(request)
 
                 elif request == "DISCONNECT":  # Handle client-initiated disconnect
                     server_log_callback(f"Client {addr} requested disconnection.")
                     break
 
+                elif request == "GET_ACTIVE_USERS":  # Respond with a list of active users
+                    with active_users_lock:
+                        active_users_list = json.dumps(active_users)
+                    conn.sendall(active_users_list.encode())
+
                 else:
                     server_log_callback(f"Unknown request type: {request}")
                     conn.sendall(b"UNKNOWN_REQUEST")
-            
+
             except Exception as e:
                 server_log_callback(f"Error processing request from {addr}: {e}")
                 break
@@ -130,6 +250,12 @@ def handle_client(conn, addr):
     except Exception as e:
         server_log_callback(f"Connection error with {addr}: {e}")
     finally:
+        if username:
+            # Remove user from active users list on disconnect
+            with active_users_lock:
+                if username in active_users:
+                    del active_users[username]
+            server_log_callback(f"User {username} disconnected.")
         conn.close()
         server_log_callback(f"Connection closed with {addr}")
 

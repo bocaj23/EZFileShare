@@ -9,6 +9,7 @@ import zlib
 import zipfile
 import shutil
 import time
+import json
 
 # Constants
 DEFAULT_HOST = '127.0.0.1' # Default Host for File Transfer
@@ -21,6 +22,7 @@ CLIENT_KEYFILE = "client.key" # Client Key
 SERVER_CERTFILE = "server.crt" # Server Cert Signed with CA Key and Cert
 SERVER_KEYFILE = "server.key" # Server Key
 CA_CRT = "ca.crt" # Certificate Authority Cert
+FRIENDS_FILE = "friends.json"
 
 # Shared state
 server_log_widget = None
@@ -178,43 +180,210 @@ def zip_directory(directory_path):
                 zipf.write(file_path, arcname)
     return zip_file_path
 
-def add_friend():
-    """Adds a new friend (host and port) to the friends list."""
-    name = simpledialog.askstring("Add Friend", "Enter friend's name:")
-    if name:
-        host, port = get_host_and_port()
-        if host and port:
-            friends_list[name] = (host, port)
-            update_friends_list()
-
-def remove_friend():
-    """Removes the selected friend from the friends list."""
+def listen_for_server_messages():
+    """Listens for messages from the server in a separate thread."""
+    global username
     try:
-        # Get the currently selected item
-        selected_index = friends_list_widget.curselection()
-        if not selected_index:
-            messagebox.showerror("Error", "No friend selected.")
+        while True:
+            try:
+                # Receive messages from the server
+                message = receive_message()
+                if not message:
+                    break
+
+                # Log the incoming message
+                client_log_callback(f"Received message: {message}")
+
+                # Handle FRIEND_REQUEST_ACCEPTED messages
+                if message.startswith("FRIEND_REQUEST_ACCEPTED"):
+                    _, sender, recipient, ip, port = message.split("|")
+                    handle_friend_request_accepted(recipient, ip, port)
+                    client_log_callback(f"Friend request from {sender} to {recipient} was accepted.")
+
+                # Handle FRIEND_REQUEST_DECLINED messages
+                elif message.startswith("FRIEND_REQUEST_DECLINED"):
+                    _, sender, recipient = message.split("|")
+                    client_log_callback(f"Friend request from {sender} to {recipient} was declined.")
+
+                # Handle FRIEND_REQUEST messages
+                elif message.startswith("FRIEND_REQUEST"):
+                    _, sender, recipient = message.split("|")
+                    client_log_callback(f"Friend request received from {sender}.")
+                    handle_friend_request(sender, recipient)
+
+                # Handle UPDATE_SUCCESS messages
+                elif message.startswith("UPDATE_SUCCESS"):
+                    client_log_callback("User Update Successful.")
+
+                else:
+                    # Handle other server messages if necessary
+                    client_log_callback(f"Unhandled server message: {message}")
+
+            except Exception as e:
+                client_log_callback(f"Error receiving or processing message: {e}")
+                break
+
+    except Exception as e:
+        client_log_callback(f"Listener thread encountered an error: {e}")
+
+def handle_friend_request(sender, recipient):
+    """Opens a Tkinter dialog box to ask the user to accept or reject a friend request."""
+    def on_accept():
+        # User accepts the friend request
+        send_message(f"FRIEND_REQUEST_ACCEPT|{sender}|{recipient}")
+        client_log_callback(f"Friend request from {sender} accepted.")
+        root.destroy()  # Close the dialog box
+
+    def on_decline():
+        # User declines the friend request
+        send_message(f"FRIEND_REQUEST_DECLINE|{sender}|{recipient}")
+        client_log_callback(f"Friend request from {sender} declined.")
+        root.destroy()  # Close the dialog box
+
+    # Create a simple dialog box
+    root = tk.Tk()
+    root.title("Friend Request")
+    root.geometry("300x150")
+    tk.Label(root, text=f"Friend request from {sender}", font=("Arial", 14)).pack(pady=20)
+
+    # Buttons for Accept and Decline
+    button_frame = tk.Frame(root)
+    button_frame.pack(pady=10)
+
+    accept_button = tk.Button(button_frame, text="Accept", command=on_accept, width=10, bg="green", fg="white")
+    accept_button.pack(side=tk.LEFT, padx=10)
+
+    decline_button = tk.Button(button_frame, text="Decline", command=on_decline, width=10, bg="red", fg="white")
+    decline_button.pack(side=tk.RIGHT, padx=10)
+
+    # Run the dialog box
+    root.mainloop()
+
+def handle_friend_request_accepted(recipient, ip, port):
+    """Handles the entire friend request accepted message."""
+    try:
+        # Ensure required fields are present
+        if not recipient or not ip or not port:
+            server_log_callback(f"Missing data in FRIEND_REQUEST_ACCEPTED message")
             return
 
-        # Extract the friend's name from the selected item
-        selected_item = friends_list_widget.get(selected_index)
-        friend_name = selected_item.split(" (")[0]
+        # Read existing friends from FRIENDS_FILE
+        try:
+            with open("friends.json", "r") as friends_file:
+                friends_data = json.load(friends_file)
+        except FileNotFoundError:
+            friends_data = {}
 
-        # Remove the friend from the dictionary
-        if friend_name in friends_list:
-            del friends_list[friend_name]
-            update_friends_list()
-            messagebox.showinfo("Success", f"Friend '{friend_name}' removed.")
-        else:
-            messagebox.showerror("Error", "Friend not found in the list.")
+        # Add new friend data
+        friends_data[recipient] = {"ip": ip, "port": port}
+
+        # Write back to FRIENDS_FILE
+        with open("friends.json", "w") as friends_file:
+            json.dump(friends_data, friends_file, indent=4)
+
+        update_friends_list(friends_list_widget)
+        server_log_callback(f"Added {recipient} to friends list with IP {ip} and Port {port}.")
     except Exception as e:
-        messagebox.showerror("Error", f"Failed to remove friend: {e}")
+        server_log_callback(f"Error processing FRIEND_REQUEST_ACCEPTED message: {e}")
 
-def update_friends_list():
-    """Updates the friends list widget."""
-    friends_list_widget.delete(0, tk.END)  # Clear the current list
-    for name, (host, port) in friends_list.items():
-        friends_list_widget.insert(tk.END, f"{name} ({host}:{port})")  # Add friends to the list
+def load_friends():
+    """Loads the friends list from the JSON file."""
+    try:
+        with open(FRIENDS_FILE, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        # If the file doesn't exist, return an empty dictionary
+        return {}
+    except json.JSONDecodeError:
+        # If the JSON file is corrupted, return an empty dictionary
+        return {}
+
+def save_friends(friends):
+    """Saves the friends list to the JSON file."""
+    try:
+        with open(FRIENDS_FILE, "w") as f:
+            json.dump(friends, f, indent=4)
+    except Exception as e:
+        client_log_callback(f"Error saving friends list: {e}")
+
+def send_friend_request():
+    """ Sends a friend request to the server and handles the response. """
+    global username
+    try:
+        # Ensure the persistent connection is established
+        if persistent_secure_socket is None:
+            raise ConnectionError("No active connection to the server.")
+        
+        sender = username
+        # Send friend request
+        recipient = simpledialog.askstring("Add Friend", "Enter friend's name:")
+        if recipient is None:
+            return
+        request_message = f"ADD_FRIEND|{sender}|{recipient}"
+        send_message(request_message)
+        client_log_callback(f"Friend Request Sent to {recipient}.")
+
+    except ConnectionError as e:
+        return f"Connection error: {e}"
+    except Exception as e:
+        return f"An error occurred while processing the friend request: {e}"
+
+def remove_friend():
+    try:
+        # Get the selected friend from the Listbox
+        selected_friend = friends_list_widget.get(tk.ACTIVE)
+        if not selected_friend:
+            messagebox.showerror("Error", "No friend selected!")
+            return
+
+        # Load the current friends data from the file
+        try:
+            with open("friends.json", "r") as file:
+                friends_data = json.load(file)
+        except FileNotFoundError:
+            messagebox.showerror("Error", "Friends file not found.")
+            return
+
+        # Check if the selected friend exists in the file
+        if selected_friend in friends_data:
+            # Remove the selected friend
+            del friends_data[selected_friend]
+
+            # Save the updated data back to the file
+            with open("friends.json", "w") as file:
+                json.dump(friends_data, file, indent=4)
+
+            update_friends_list(friends_list_widget)
+            
+            messagebox.showinfo("Success", f"{selected_friend} has been removed from your friends list.")
+        else:
+            messagebox.showerror("Error", f"{selected_friend} is not in your friends list.")
+
+    except Exception as e:
+        messagebox.showerror("Error", f"An error occurred: {e}")
+
+def update_friends_list(friends_list_widget):
+    """
+    Updates the friends list UI widget by reading the FRIENDS_FILE.
+    """
+    try:
+        # Load friends from the JSON file
+        with open(FRIENDS_FILE, "r") as f:
+            friends_data = json.load(f)
+    except FileNotFoundError:
+        friends_data = {}  # No friends file exists yet
+    except json.JSONDecodeError:
+        friends_data = {}  # Corrupted file, treat as empty
+
+    # Clear the existing list in the widget
+    friends_list_widget.delete(0, tk.END)
+
+    # Add friends to the widget
+    for friend, details in friends_data.items():
+        ip = details.get("ip", "Unknown IP")
+        port = details.get("port", "Unknown Port")
+        friends_list_widget.insert(tk.END, f"{friend}")
+        # friends_list_widget.insert(tk.END, f"{friend} (IP: {ip}, Port: {port})")
 
 def start_server():
     """Starts the server in a separate thread."""
@@ -292,11 +461,11 @@ def connect_persistent(host, port):
         persistent_secure_socket = client_ssl_context.wrap_socket(raw_socket, server_hostname=host)
         return persistent_secure_socket
     except socket.error as e:
-        print(f"Socket error: {e}")
+        client_log_callback(f"Socket error: {e}")
     except ssl.SSLError as e:
-        print(f"SSL error: {e}")
+        client_log_callback(f"SSL error: {e}")
     except Exception as e:
-        print(f"Unexpected error: {e}")
+        client_log_callback(f"Unexpected error: {e}")
     return None  # Return None if connection fails
 
 def disconnect_persistent():
@@ -360,7 +529,7 @@ def show_login():
     password_entry.grid(row=1, column=1, padx=10, pady=5)
     
     tk.Button(login_window, text="Login", command=attempt_login).grid(row=2, column=0, columnspan=2, pady=10)
-    username = username_entry
+    
     login_window.mainloop()
     return login_success
 
@@ -392,17 +561,38 @@ def send_periodic_updates():
 
                 # Send update request
                 ip = socket.gethostbyname(socket.gethostname())
-                message = f"update|{username}|{ip}|{CLIENT_PORT}"
+                message = f"UPDATE|{username}|{ip}|{CLIENT_PORT}"
                 send_message(message)
 
                 # Receive response
-                response = receive_message()
-                client_log_callback(f"Periodic Update Response: {response}")
+                #response = receive_message()
+                #client_log_callback(f"Periodic Update Response: {response}")
             except Exception as e:
                 client_log_callback(f"Error in periodic update: {e}")
             time.sleep(60)  # Send updates every 60 seconds
 
     threading.Thread(target=update, daemon=True).start()
+
+
+def get_active_users():
+    """Gets the list of active users from the server."""
+    try:
+        # Send the request to get active users
+        send_message("GET_ACTIVE_USERS")
+        
+        # Receive and decode the response
+        response = receive_message()
+        
+        # Parse the JSON response
+        active_users = json.loads(response)
+        client_log_callback(f"Active Users: {active_users}")
+        return active_users
+    except json.JSONDecodeError:
+        raise ValueError("Failed to parse the server's response. Invalid JSON format.")
+    except ConnectionError as e:
+        raise ConnectionError(f"Connection error while getting active users: {e}")
+    except Exception as e:
+        raise Exception(f"An error occurred while getting active users: {e}")
 
 # Starting updates after login
 def start_user_data_updates():
@@ -420,8 +610,11 @@ def main():
     root = tk.Tk()
     root.title("EZFileShare")
 
+    # Start Listener for User Server Messages
+    threading.Thread(target=listen_for_server_messages, daemon=True).start()
+    
     # Start User Data Updates
-    threading.Thread(target=start_user_data_updates, daemon=True).start()
+    #threading.Thread(target=start_user_data_updates, daemon=True).start()
 
     # Server Section
     tk.Label(root, text="Receive").grid(row=1, column=0, padx=10, pady=5, sticky="w")
@@ -436,14 +629,17 @@ def main():
     client_log_widget.grid(row=2, column=1, padx=10, pady=5)
     tk.Button(root, text="Select File & Send", command=select_and_send_file).grid(row=3, column=1, padx=10, pady=5)
     tk.Button(root, text="Select Directory & Send", command=select_and_send_directory).grid(row=4, column=1, padx=10, pady=5)
+    tk.Button(root, text="Get Active Users", command=get_active_users).grid(row=5, column=1, padx=10, pady=5)
     #tk.Button(root, text="Disconnect From User Server", command=disconnect_persistent).grid(row=5, column=1, padx=10, pady=5)
 
     # Friends List Section
     tk.Label(root, text="Friends List").grid(row=5, column=0, padx=10, pady=5, sticky="w")
     friends_list_widget = tk.Listbox(root, height=10, width=50)
     friends_list_widget.grid(row=6, column=0, padx=10, pady=5)
-    tk.Button(root, text="Add Friend", command=add_friend).grid(row=7, column=0, padx=10, pady=5)
+    tk.Button(root, text="Add Friend", command=send_friend_request).grid(row=7, column=0, padx=10, pady=5)
     tk.Button(root, text="Remove Friend", command=remove_friend).grid(row=8, column=0, padx=10, pady=5)
+
+    update_friends_list(friends_list_widget)
 
     # Host and Port Configuration
     tk.Label(root, text="Host:").grid(row=6, column=0, padx=10, pady=5, sticky="e")

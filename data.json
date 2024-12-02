@@ -1,5 +1,17 @@
 {
-    "admin": "password",
-    "user1": "pass123",
-    "user2": "mypassword"
+    "admin": {
+        "password": "password",
+        "ip": "127.0.0.1",
+        "port": 65432
+    },
+    "user1": {
+        "password": "pass123",
+        "ip": "127.0.0.1",
+        "port": 65432
+    },
+    "user2": {
+        "password": "mypassword",
+        "ip": "10.0.0.5",
+        "port": 65432
+    }
 }
