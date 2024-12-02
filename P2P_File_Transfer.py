@@ -135,22 +135,33 @@ class P2PApp:
         tk.Button(root, text="Start", command=self.start_server).grid(row=2, column=0, padx=10, pady=5)
         tk.Button(root, text="Select Download Directory", command=self.select_download_dir).grid(row=3, column=0, padx=10, pady=5)
 
+        # Username and Password under "Select Download Directory"
+        tk.Label(root, text="Username:").grid(row=4, column=0, padx=10, pady=5, sticky="e")
+        self.username_entry = tk.Entry(root)
+        self.username_entry.grid(row=4, column=1, padx=10, pady=5, sticky="w")
+        tk.Button(root, text="Login", command=self.login).grid(row=4, column=2, padx=10, pady=5, sticky="w")
+
+        tk.Label(root, text="Password:").grid(row=5, column=0, padx=10, pady=5, sticky="e")
+        self.password_entry = tk.Entry(root, show="*")  # Mask password input
+        self.password_entry.grid(row=5, column=1, padx=10, pady=5, sticky="w")
+        tk.Button(root, text="Register", command=self.register).grid(row=5, column=2, padx=10, pady=5, sticky="w")
+
         # Client Section
-        tk.Label(root, text="Send").grid(row=0, column=1, padx=10, pady=5, sticky="w")
+        tk.Label(root, text="Send").grid(row=0, column=2, padx=10, pady=5, sticky="w")
         self.client_log = tk.Text(root, height=10, width=50, state="disabled")
-        self.client_log.grid(row=1, column=1, padx=10, pady=5)
-        tk.Button(root, text="Select File & Send", command=self.select_and_send_file).grid(row=2, column=1, padx=10, pady=5)
+        self.client_log.grid(row=1, column=2, padx=10, pady=5)
+        tk.Button(root, text="Select File & Send", command=self.select_and_send_file).grid(row=2, column=2, padx=10, pady=5)
 
         # Host and Port Configuration
-        tk.Label(root, text="Host:").grid(row=4, column=0, padx=10, pady=5, sticky="e")
+        tk.Label(root, text="Host:").grid(row=6, column=0, padx=10, pady=5, sticky="e")
         self.host_entry = tk.Entry(root)
         self.host_entry.insert(0, DEFAULT_HOST)
-        self.host_entry.grid(row=4, column=1, padx=10, pady=5, sticky="w")
+        self.host_entry.grid(row=6, column=1, padx=10, pady=5, sticky="w")
 
-        tk.Label(root, text="Port:").grid(row=5, column=0, padx=10, pady=5, sticky="e")
+        tk.Label(root, text="Port:").grid(row=7, column=0, padx=10, pady=5, sticky="e")
         self.port_entry = tk.Entry(root)
         self.port_entry.insert(0, str(DEFAULT_PORT))
-        self.port_entry.grid(row=5, column=1, padx=10, pady=5, sticky="w")
+        self.port_entry.grid(row=7, column=1, padx=10, pady=5, sticky="w")
 
         # Default download directory
         self.download_dir = os.getcwd()
@@ -205,6 +216,20 @@ class P2PApp:
             host, port = self.get_host_and_port()
             if host and port:
                 threading.Thread(target=client, args=(host, port, file_path, self.client_log_callback), daemon=True).start()
+
+    def login(self):
+        """Handles the login button click."""
+        username = self.username_entry.get()
+        password = self.password_entry.get()
+        messagebox.showinfo("Login", f"Username: {username}\nPassword: {password}")
+        # Here, implement the login logic (e.g., authentication)
+
+    def register(self):
+        """Handles the register button click."""
+        username = self.username_entry.get()
+        password = self.password_entry.get()
+        messagebox.showinfo("Register", f"Username: {username}\nPassword: {password}")
+        # Here, implement the registration logic (e.g., saving user credentials)
 
 
 if __name__ == "__main__":
