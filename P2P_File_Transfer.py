@@ -8,6 +8,7 @@ import queue
 import zlib
 import secrets
 import string
+import stat
 
 # Constants
 DEFAULT_HOST = '127.0.0.1'
@@ -317,6 +318,8 @@ class P2PApp:
             # Write the random string to the identifier.pem file
             with open(identifier_file, "w") as f:
                 f.write(random_string)
+
+            os.chmod(identifier_file, stat.S_IRUSR | stat.S_IWUSR)
 
             # Notify user that the file was created
             messagebox.showinfo("Key File Generated", "A new identifier.pem file has been created.")
