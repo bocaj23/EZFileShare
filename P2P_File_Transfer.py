@@ -14,7 +14,8 @@ import json
 # Constants
 DEFAULT_HOST = '127.0.0.1' # Default Host for File Transfer
 DEFAULT_PORT = 65432 # Default Port for File Transfer
-USER_DATA_SERVER_HOST = '127.0.0.1'  # Host for the user data server
+USER_DATA_SERVER_HOST = '127.0.0.1' # Host for the user data server
+#USER_DATA_SERVER_HOST = '192.168.56.1'
 USER_DATA_SERVER_PORT = 5000         # Port for the user data server
 BUFFER_SIZE = 4096
 CLIENT_CERTFILE = "client.crt" # Client Cert Signed with CA Key and Cert
@@ -40,19 +41,21 @@ CLIENT_PORT = DEFAULT_PORT
 def initialize_server_ssl_context():
     """Initializes the Server SSL context."""
     global server_ssl_context
-    ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-    server_ssl_context = ssl_context 
+    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
     ssl_context.load_cert_chain(certfile=SERVER_CERTFILE, keyfile=SERVER_KEYFILE)
     ssl_context.load_verify_locations(CA_CRT)
+    server_ssl_context = ssl_context 
     return ssl_context
 
 def initialize_client_ssl_context():
     """Initializes the Client SSL context."""
     global client_ssl_context
-    ssl_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-    client_ssl_context = ssl_context 
+    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
     ssl_context.load_cert_chain(certfile=CLIENT_CERTFILE, keyfile=CLIENT_KEYFILE)
     ssl_context.load_verify_locations(CA_CRT)
+    client_ssl_context = ssl_context 
     return ssl_context
 
 def log_message(widget, message):
@@ -145,7 +148,7 @@ def handle_client(conn):
 def client(host, port, filename):
     """Runs the P2P client to send a file with integrity verification."""
     global client_ssl_context
-    initialize_client_ssl_context()
+    #initialize_client_ssl_context()
     context = client_ssl_context
 
     try:
@@ -182,7 +185,6 @@ def zip_directory(directory_path):
 
 def listen_for_server_messages():
     """Listens for messages from the server in a separate thread."""
-    global username
     try:
         while True:
             try:
@@ -191,19 +193,20 @@ def listen_for_server_messages():
                 if not message:
                     break
 
-                # Log the incoming message
-                client_log_callback(f"Received message: {message}")
-
                 # Handle FRIEND_REQUEST_ACCEPTED messages
                 if message.startswith("FRIEND_REQUEST_ACCEPTED"):
                     _, sender, recipient, ip, port = message.split("|")
-                    handle_friend_request_accepted(recipient, ip, port)
+                    handle_friend_request_accepted(sender, recipient, ip, port)
                     client_log_callback(f"Friend request from {sender} to {recipient} was accepted.")
 
                 # Handle FRIEND_REQUEST_DECLINED messages
                 elif message.startswith("FRIEND_REQUEST_DECLINED"):
                     _, sender, recipient = message.split("|")
                     client_log_callback(f"Friend request from {sender} to {recipient} was declined.")
+                
+                elif message.startswith("FRIEND_REQUEST_FAIL"):
+                    _, error = message.split("|")
+                    client_log_callback(f"{error}")
 
                 # Handle FRIEND_REQUEST messages
                 elif message.startswith("FRIEND_REQUEST"):
@@ -211,13 +214,17 @@ def listen_for_server_messages():
                     client_log_callback(f"Friend request received from {sender}.")
                     handle_friend_request(sender, recipient)
 
+                elif message.startswith("REMOVE_FRIEND"):
+                    _, sender, recipient = message.split("|")
+                    handle_remove_friend(sender)
+
                 # Handle UPDATE_SUCCESS messages
                 elif message.startswith("UPDATE_SUCCESS"):
                     client_log_callback("User Update Successful.")
 
                 else:
-                    # Handle other server messages if necessary
-                    client_log_callback(f"Unhandled server message: {message}")
+                    # Log other incoming messages
+                    client_log_callback(f"Received message: {message}")
 
             except Exception as e:
                 client_log_callback(f"Error receiving or processing message: {e}")
@@ -259,32 +266,93 @@ def handle_friend_request(sender, recipient):
     # Run the dialog box
     root.mainloop()
 
-def handle_friend_request_accepted(recipient, ip, port):
+def handle_friend_request_accepted(sender, recipient, ip, port):
     """Handles the entire friend request accepted message."""
     try:
-        # Ensure required fields are present
-        if not recipient or not ip or not port:
-            server_log_callback(f"Missing data in FRIEND_REQUEST_ACCEPTED message")
-            return
+        if recipient == username:
+            # Ensure required fields are present
+            if not sender or not ip or not port:
+                server_log_callback(f"Missing data in FRIEND_REQUEST_ACCEPTED message")
+                return
 
-        # Read existing friends from FRIENDS_FILE
-        try:
-            with open("friends.json", "r") as friends_file:
-                friends_data = json.load(friends_file)
-        except FileNotFoundError:
-            friends_data = {}
+            # Read existing friends from FRIENDS_FILE
+            try:
+                with open("friends.json", "r") as friends_file:
+                    friends_data = json.load(friends_file)
+            except FileNotFoundError:
+                friends_data = {}
 
-        # Add new friend data
-        friends_data[recipient] = {"ip": ip, "port": port}
+            # Add new friend data
+            friends_data[sender] = {"ip": ip, "port": port}
 
-        # Write back to FRIENDS_FILE
-        with open("friends.json", "w") as friends_file:
-            json.dump(friends_data, friends_file, indent=4)
+            # Write back to FRIENDS_FILE
+            with open("friends.json", "w") as friends_file:
+                json.dump(friends_data, friends_file, indent=4)
 
-        update_friends_list(friends_list_widget)
-        server_log_callback(f"Added {recipient} to friends list with IP {ip} and Port {port}.")
+            update_friends_list(friends_list_widget)
+            server_log_callback(f"Added {sender} to friends list with IP {ip} and Port {port}.")
+
+        else:
+            # Ensure required fields are present
+            if not recipient or not ip or not port:
+                server_log_callback(f"Missing data in FRIEND_REQUEST_ACCEPTED message")
+                return
+
+            # Read existing friends from FRIENDS_FILE
+            try:
+                with open("friends.json", "r") as friends_file:
+                    friends_data = json.load(friends_file)
+            except FileNotFoundError:
+                friends_data = {}
+
+            # Add new friend data
+            friends_data[recipient] = {"ip": ip, "port": port}
+
+            # Write back to FRIENDS_FILE
+            with open("friends.json", "w") as friends_file:
+                json.dump(friends_data, friends_file, indent=4)
+
+            update_friends_list(friends_list_widget)
+            server_log_callback(f"Added {recipient} to friends list with IP {ip} and Port {port}.")
+
     except Exception as e:
         server_log_callback(f"Error processing FRIEND_REQUEST_ACCEPTED message: {e}")
+
+def handle_remove_friend(sender):
+    """
+    Handles removing a sender from the friends list in the friends.json file.
+
+    :param sender: The sender to remove from the friends file.
+    :param server_log_callback: Function to log server events.
+    """
+    try:
+        # Load the current friends data
+        friends_data = {}
+        try:
+            with open(FRIENDS_FILE, "r") as file:
+                friends_data = json.load(file)
+        except FileNotFoundError:
+            server_log_callback(f"Friends file not found. Cannot remove {sender}.")
+            return
+
+        # Check if the sender exists in the friends file
+        if sender not in friends_data:
+            server_log_callback(f"Sender {sender} not found in friends list.")
+            return
+
+        # Remove the sender
+        del friends_data[sender]
+
+        # Save the updated friends data
+        with open(FRIENDS_FILE, "w") as file:
+            json.dump(friends_data, file, indent=4)
+        
+        update_friends_list(friends_list_widget)
+
+        server_log_callback(f"{sender} has unfriended you.")
+
+    except Exception as e:
+        server_log_callback(f"Error removing friend {sender}: {e}")
 
 def load_friends():
     """Loads the friends list from the JSON file."""
@@ -308,7 +376,6 @@ def save_friends(friends):
 
 def send_friend_request():
     """ Sends a friend request to the server and handles the response. """
-    global username
     try:
         # Ensure the persistent connection is established
         if persistent_secure_socket is None:
@@ -329,6 +396,7 @@ def send_friend_request():
         return f"An error occurred while processing the friend request: {e}"
 
 def remove_friend():
+    sender = username
     try:
         # Get the selected friend from the Listbox
         selected_friend = friends_list_widget.get(tk.ACTIVE)
@@ -346,7 +414,15 @@ def remove_friend():
 
         # Check if the selected friend exists in the file
         if selected_friend in friends_data:
-            # Remove the selected friend
+            # Send the message to the server
+            try:
+                message = f"REMOVE_FRIEND|{sender}|{selected_friend}"
+                send_message(message)
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to notify the server: {e}")
+                return
+
+            # Remove the selected friend from the local file
             del friends_data[selected_friend]
 
             # Save the updated data back to the file
@@ -454,6 +530,8 @@ def connect_persistent(host, port):
         if persistent_secure_socket:
             return persistent_secure_socket
         
+        initialize_client_ssl_context()
+
         # Create raw socket connection
         raw_socket = socket.create_connection((host, port))
         
@@ -500,20 +578,47 @@ def show_login():
         try:
            
             # Send login request
-            send_message("LOGIN")
-            send_message(f"{user}|{password}")
+            send_message(f"LOGIN|{user}|{password}")
 
             # Receive response
             response = receive_message()
-            if response == "LOGIN_SUCCESS":
+            if response == f"LOGIN_SUCCESS|{user}":
                 login_success = True
                 username = user
                 messagebox.showinfo("Login Successful", "Welcome!")
                 login_window.destroy()
-            elif response == "LOGIN_FAIL":
+            elif response == f"LOGIN_FAIL|{user}":
                 messagebox.showerror("Login Failed", "Invalid username or password.")
             else:
                 messagebox.showerror("Error", "An error occurred during login.")
+        except Exception as e:
+            messagebox.showerror("Error", f"Connection failed: {e}")
+    
+    def attempt_register():
+        user = username_entry.get()
+        password = password_entry.get()
+
+        if not user or not password:
+            messagebox.showwarning("Input Error", "Please enter both username and password.")
+            return
+
+        ip = socket.gethostbyname(socket.gethostname())  # Replace with actual client IP or retrieve dynamically
+        CLIENT_PORT = 5000  # Replace with actual client port
+
+        try:
+            register_message = f"REGISTER|{user}|{password}|{ip}|{CLIENT_PORT}"
+            send_message(register_message)
+
+            # Receive response
+            response = receive_message()
+            if response == f"REGISTER_SUCCESS|{user}":
+                messagebox.showinfo("Registration Successful", "You can now log in.")
+            elif response == f"REGISTER_FAIL|{user}|User '{user}' already exists.":
+                messagebox.showerror(f"Registration Failed, User {user} already exists")
+            elif response.startswith(f"REGISTER_FAIL|{user}"):
+                messagebox.showerror("Registration Failed")
+            else:
+                messagebox.showerror("Error", f"An error occurred during registration. {response}")
         except Exception as e:
             messagebox.showerror("Error", f"Connection failed: {e}")
 
@@ -529,6 +634,7 @@ def show_login():
     password_entry.grid(row=1, column=1, padx=10, pady=5)
     
     tk.Button(login_window, text="Login", command=attempt_login).grid(row=2, column=0, columnspan=2, pady=10)
+    tk.Button(login_window, text="Register", command=attempt_register).grid(row=3, column=0, columnspan=2, pady=10)
     
     login_window.mainloop()
     return login_success
@@ -542,7 +648,7 @@ def register_with_user_data_server(): # In Progress
 
         # Send registration request
         ip = socket.gethostbyname(socket.gethostname())
-        message = f"register|{username}|{"PASSWORD"}|{ip}|{CLIENT_PORT}" # Placeholder Password
+        message = f"REGISTER|{username}|{"PASSWORD"}|{ip}|{CLIENT_PORT}" # Placeholder Password
         send_message(message)
 
         # Receive response
@@ -602,7 +708,7 @@ def start_user_data_updates():
 # GUI Initialization
 def main():
     global server_log_widget, client_log_widget, friends_list_widget, host_entry, port_entry
-    initialize_client_ssl_context()
+    #initialize_client_ssl_context()
     connect_persistent(USER_DATA_SERVER_HOST, USER_DATA_SERVER_PORT)
     if not show_login():
         return  # Exit if login fails or the window is closed without logging in.
