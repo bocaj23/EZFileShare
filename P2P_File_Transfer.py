@@ -6,6 +6,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 import queue
 import zlib
+import subprocess
 
 # Constants
 DEFAULT_HOST = '127.0.0.1'
@@ -13,6 +14,43 @@ DEFAULT_PORT = 65432
 BUFFER_SIZE = 4096
 CERTFILE = "cert.pem"
 KEYFILE = "key.pem"
+AUTHCERTFILE = "authcert.pem"
+
+def send_to_server(endpoint, username, password):
+    """Sends data to the remote server securely using an SSL socket."""
+    server_host = "50.19.225.62"
+    server_port = 6223
+    
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    auth_cert_file = os.path.join(script_dir, "authcert.pem")
+
+    # Create a payload
+    payload = f"{endpoint.upper()} {username} {password}\n"
+
+    # Create an SSL context
+    context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+    context.load_verify_locations(auth_cert_file)
+
+    try:
+        # Create a TCP connection
+        with socket.create_connection((server_host, server_port)) as sock:
+            # Wrap the socket with SSL
+            with context.wrap_socket(sock, server_hostname=server_host) as secure_sock:
+                print("Connection established with the server.")
+                
+                # Send the payload
+                secure_sock.sendall(payload.encode('utf-8'))
+                print("Payload sent to server")
+
+                secure_sock.shutdown(socket.SHUT_WR)
+                
+                # Receive the server's response
+                response = secure_sock.recv(4096).decode('utf-8', errors='ignore')
+                print("Response received from server.")
+                return response
+    except Exception as e:
+        return f"Error: {e}"
+
 
 
 def create_tls_context():
@@ -135,15 +173,20 @@ class P2PApp:
         tk.Button(root, text="Start", command=self.start_server).grid(row=2, column=0, padx=10, pady=5)
         tk.Button(root, text="Select Download Directory", command=self.select_download_dir).grid(row=3, column=0, padx=10, pady=5)
 
-        # Username and Password under "Select Download Directory"
+        # Username Section
         tk.Label(root, text="Username:").grid(row=4, column=0, padx=10, pady=5, sticky="e")
         self.username_entry = tk.Entry(root)
         self.username_entry.grid(row=4, column=1, padx=10, pady=5, sticky="w")
+
+        # Login Sectiopn
         tk.Button(root, text="Login", command=self.login).grid(row=4, column=2, padx=10, pady=5, sticky="w")
 
+        # Password Section
         tk.Label(root, text="Password:").grid(row=5, column=0, padx=10, pady=5, sticky="e")
         self.password_entry = tk.Entry(root, show="*")  # Mask password input
         self.password_entry.grid(row=5, column=1, padx=10, pady=5, sticky="w")
+
+        # Register Section
         tk.Button(root, text="Register", command=self.register).grid(row=5, column=2, padx=10, pady=5, sticky="w")
 
         # Client Section
@@ -221,16 +264,24 @@ class P2PApp:
         """Handles the login button click."""
         username = self.username_entry.get()
         password = self.password_entry.get()
-        messagebox.showinfo("Login", f"Username: {username}\nPassword: {password}")
-        # Here, implement the login logic (e.g., authentication)
+
+        # Send to remote server
+        response = send_to_server("LOGIN", username, password)
+
+        # Display server response
+        messagebox.showinfo("Login Response", response)
+
 
     def register(self):
         """Handles the register button click."""
         username = self.username_entry.get()
         password = self.password_entry.get()
-        messagebox.showinfo("Register", f"Username: {username}\nPassword: {password}")
-        # Here, implement the registration logic (e.g., saving user credentials)
 
+        # Send to remote server
+        response = send_to_server("REGISTER", username, password)
+
+        # Display server response
+        messagebox.showinfo("Register Response", response)
 
 if __name__ == "__main__":
     root = tk.Tk()
