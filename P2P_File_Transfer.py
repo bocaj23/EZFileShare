@@ -6,7 +6,8 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 import queue
 import zlib
-import subprocess
+import secrets
+import string
 
 # Constants
 DEFAULT_HOST = '127.0.0.1'
@@ -16,7 +17,7 @@ CERTFILE = "cert.pem"
 KEYFILE = "key.pem"
 AUTHCERTFILE = "authcert.pem"
 
-def send_to_server(endpoint, username, password):
+def send_to_server(endpoint, username, password, identifier):
     """Sends data to the remote server securely using an SSL socket."""
     server_host = "50.19.225.62"
     server_port = 6223
@@ -25,7 +26,7 @@ def send_to_server(endpoint, username, password):
     auth_cert_file = os.path.join(script_dir, "authcert.pem")
 
     # Create a payload
-    payload = f"{endpoint.upper()} {username} {password}\n"
+    payload = f"{endpoint.upper()} {username} {password} {identifier}\n"
 
     # Create an SSL context
     context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
@@ -265,23 +266,72 @@ class P2PApp:
         username = self.username_entry.get()
         password = self.password_entry.get()
 
-        # Send to remote server
-        response = send_to_server("LOGIN", username, password)
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        identifier_file = os.path.join(script_dir, "identifier.pem")
 
-        # Display server response
-        messagebox.showinfo("Login Response", response)
+        try:
+            # Check if the identifier file exists
+            if not os.path.exists(identifier_file):
+                raise FileNotFoundError("The identifier.pem file is missing. Please register first.")
+
+            # Read the contents of identifier.pem
+            with open(identifier_file, "r") as f:
+                key_string = f.read().strip()  # Remove any trailing whitespace or newlines
+
+            # Ensure the key string is not empty
+            if not key_string:
+                raise ValueError("The identifier.pem file is empty or corrupted.")
+
+            # Send data to the server
+            response = send_to_server("LOGIN", username, password, key_string)
+
+            # Display server response
+            messagebox.showinfo("Login Response", response)
+
+        except FileNotFoundError as e:
+            messagebox.showerror("Error", f"File Error: {e}")
+        except ValueError as e:
+            messagebox.showerror("Error", f"Value Error: {e}")
+        except Exception as e:
+            messagebox.showerror("Error", f"An unexpected error occurred: {e}")
+
 
 
     def register(self):
-        """Handles the register button click."""
+        """Handles the register button click with secure key generation."""
         username = self.username_entry.get()
         password = self.password_entry.get()
 
-        # Send to remote server
-        response = send_to_server("REGISTER", username, password)
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        identifier_file = os.path.join(script_dir, "identifier.pem")
 
-        # Display server response
-        messagebox.showinfo("Register Response", response)
+        try:
+            # Check if the identifier.pem file already exists
+            if os.path.exists(identifier_file):
+                raise FileExistsError("The identifier.pem file already exists. Registration cannot overwrite the file.")
+
+            # Generate 64 random characters
+            chars = string.ascii_letters + string.digits
+            random_string = ''.join(secrets.choice(chars) for _ in range(64))
+
+            # Write the random string to the identifier.pem file
+            with open(identifier_file, "w") as f:
+                f.write(random_string)
+
+            # Notify user that the file was created
+            messagebox.showinfo("Key File Generated", "A new identifier.pem file has been created.")
+
+            # Send registration request to the server
+            response = send_to_server("REGISTER", username, password, random_string)
+
+            # Display server response
+            messagebox.showinfo("Register Response", response)
+
+        except PermissionError as e:
+            messagebox.showerror("Error", f"Permission Error: {e}")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"An unexpected error occurred: {e}")
 
 if __name__ == "__main__":
     root = tk.Tk()
