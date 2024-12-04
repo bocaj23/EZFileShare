@@ -42,16 +42,25 @@ def send_to_server(endpoint, username, password, identifier):
                 
                 # Send the payload
                 secure_sock.sendall(payload.encode('utf-8'))
-                print("Payload sent to server")
+                print("Payload sent to server.")
 
-                secure_sock.shutdown(socket.SHUT_WR)
-                
-                # Receive the server's response
-                response = secure_sock.recv(4096).decode('utf-8', errors='ignore')
-                print("Response received from server.")
+                # Read the server's response
+                response = secure_sock.recv(BUFFER_SIZE).decode('utf-8', errors='ignore')
+                print("Response received from server:", response)
+
+                # Close the SSL socket gracefully
+                secure_sock.shutdown(socket.SHUT_RDWR)
+                secure_sock.close()
+
                 return response
+
+    except ssl.SSLError as e:
+        print(f"SSL error: {e}")
+        return f"SSL Error: {e}"
     except Exception as e:
+        print(f"Client error: {e}")
         return f"Error: {e}"
+
 
 
 
