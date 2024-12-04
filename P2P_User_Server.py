@@ -174,6 +174,105 @@ def handle_update_request(conn, message):
         server_log_callback(f"Error handling update request: {e}")
         conn.sendall(b"UPDATE_ERROR")
 
+def handle_request_to_send(sender, recipient, filename):
+    """Handles a request to send a file from a sender to a recipient."""
+    try:
+        # Check if recipient exists in user data
+        try:
+            with open(USER_DATA_FILE, "r") as file:
+                user_data = json.load(file)
+        except FileNotFoundError:
+            server_log_callback("User data file not found.")
+            return
+
+        if recipient not in user_data:
+            with active_users_lock:
+                sender_conn = active_users[sender]["conn"]
+            sender_conn.sendall(f"FILE_TRANSFER_FAIL|User {recipient} does not exist.".encode())
+            server_log_callback(f"File transfer request from {sender} failed: User {recipient} does not exist.")
+            return
+
+        # Check if recipient is online
+        with active_users_lock:
+            if recipient in active_users:
+                recipient_conn = active_users[recipient]["conn"]
+                # Forward the file transfer request
+                file_transfer_message = f"REQUEST_FILE_TRANSFER|{sender}|{recipient}|{filename}"
+                recipient_conn.sendall(file_transfer_message.encode())
+                server_log_callback(f"File transfer request from {sender} forwarded to {recipient} for file '{filename}'.")
+            else:
+                sender_conn = active_users[sender]["conn"]
+                sender_conn.sendall(f"FILE_TRANSFER_FAIL|Recipient {recipient} is not online.".encode())
+                server_log_callback(f"Failed to send file transfer request from {sender} to {recipient}: Recipient not online.")
+    except KeyError:
+        with active_users_lock:
+            sender_conn = active_users[sender]["conn"]
+        sender_conn.sendall(f"Error: User {recipient} is not active.".encode())
+    except Exception as e:
+        server_log_callback(f"Error handling file transfer request from {sender} to {recipient} for file '{filename}': {e}")
+
+
+def handle_request_to_send_response(message):
+    """
+    Handles a file transfer response with the format:
+    FILE_TRANSFER_ACCEPT|{sender}|{recipient}|{DEFAULT_HOST}|{DEFAULT_PORT}
+    or
+    FILE_TRANSFER_DECLINE|{sender}|{recipient}.
+    """
+    try:
+        # Parse the incoming message
+        parts = message.split("|")
+        if len(parts) not in (3, 5):
+            server_log_callback(f"Invalid message format: {message}")
+            return
+
+        action, sender, recipient = parts[:3]
+
+        # Ensure the action is valid
+        if action not in ("FILE_TRANSFER_ACCEPT", "FILE_TRANSFER_DECLINE"):
+            server_log_callback(f"Invalid action in message: {action}")
+            return
+
+        sender_conn = None
+
+        # Access active users safely to get sender connection
+        with active_users_lock:
+            if sender in active_users:
+                sender_conn = active_users[sender]["conn"]
+            else:
+                server_log_callback(f"Sender {sender} is not online. Cannot send response.")
+                return
+
+        # Handle ACCEPT or DECLINE responses
+        if action == "FILE_TRANSFER_ACCEPT" and len(parts) == 5:
+            try:
+                # Extract recipient's host and port from the message
+                recipient_host, recipient_port = parts[3], parts[4]
+
+                # Notify the sender of the acceptance with recipient's host and port
+                accept_message = f"FILE_TRANSFER_ACCEPT|{sender}|{recipient}|{recipient_host}|{recipient_port}"
+                sender_conn.sendall(accept_message.encode())
+                server_log_callback(
+                    f"File transfer request accepted by {recipient}. Info sent to {sender}: {recipient_host}:{recipient_port}"
+                )
+            except Exception as e:
+                server_log_callback(f"Error sending file transfer acceptance: {e}")
+
+        elif action == "FILE_TRANSFER_DECLINE":
+            try:
+                # Notify the sender of the declined request
+                decline_message = f"FILE_TRANSFER_DECLINE|{sender}|{recipient}"
+                sender_conn.sendall(decline_message.encode())
+                server_log_callback(f"File transfer request declined by {recipient}. Notification sent to {sender}.")
+            except Exception as e:
+                server_log_callback(f"Error sending file transfer decline: {e}")
+
+        else:
+            server_log_callback(f"Invalid message format or missing host/port: {message}")
+
+    except Exception as e:
+        server_log_callback(f"Error handling file transfer response: {e}")
+
 def handle_add_friend_request(sender, recipient):
     """Handles an add friend request."""
     try:
@@ -360,6 +459,17 @@ def handle_client(conn, addr):
                     server_log_callback(f"Periodic update received: {request}")
                     handle_update_request(conn, request)
 
+                elif request.startswith("REQUEST_FILE_TRANSFER|"):
+                    _, sender, recipient, filename = request.split("|")
+                    handle_request_to_send(sender, recipient, filename)
+
+                elif request.startswith("FILE_TRANSFER_ACCEPT|"):
+                    #format "FILE_TRANSFER_ACCEPT|{sender}|{recipient}|{DEFAULT_HOST}|{DEFAULT_PORT}"
+                    handle_request_to_send_response(request)
+
+                elif request.startswith("FILE_TRANSFER_DECLINE|"):
+                    handle_request_to_send_response(request)
+
                 elif request.startswith("ADD_FRIEND|"):  # Handle add friend requests
                     _, sender, recipient = request.split("|")
                     handle_add_friend_request(sender, recipient)
@@ -369,11 +479,9 @@ def handle_client(conn, addr):
 
                 elif request.startswith("FRIEND_REQUEST_ACCEPT|"):  # Handle friend request responses
                     #conn.sendall(b"Friend Request Received")
-                    #f"FRIEND_REQUEST_ACCEPT|{sender}|{recipient}"
                     handle_friend_response(request)
                     
                 elif request.startswith("FRIEND_REQUEST_DECLINE|"):
-                    #f"FRIEND_REQUEST_DECLINE|{sender}|{recipient}"
                     handle_friend_response(request)
 
                 elif request == "DISCONNECT":  # Handle client-initiated disconnect
