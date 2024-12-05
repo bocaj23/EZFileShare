@@ -183,8 +183,9 @@ class P2PApp:
         self.username_entry = tk.Entry(root)
         self.username_entry.grid(row=4, column=1, padx=10, pady=5, sticky="w")
 
-        # Login Sectiopn
-        tk.Button(root, text="Login", command=self.login).grid(row=4, column=2, padx=10, pady=5, sticky="w")
+        # Login Section
+        self.login_button = tk.Button(root, text="Login", command=self.login)
+        self.login_button.grid(row=4, column=2, padx=10, pady=5, sticky="w")
 
         # Password Section
         tk.Label(root, text="Password:").grid(row=5, column=0, padx=10, pady=5, sticky="e")
@@ -192,7 +193,8 @@ class P2PApp:
         self.password_entry.grid(row=5, column=1, padx=10, pady=5, sticky="w")
 
         # Register Section
-        tk.Button(root, text="Register", command=self.register).grid(row=5, column=2, padx=10, pady=5, sticky="w")
+        self.register_button = tk.Button(root, text="Register", command=self.register)
+        self.register_button.grid(row=5, column=2, padx=10, pady=5, sticky="w")
 
         # Client Section
         tk.Label(root, text="Send").grid(row=0, column=2, padx=10, pady=5, sticky="w")
@@ -274,23 +276,24 @@ class P2PApp:
         identifier_file = os.path.join(script_dir, "identifier.pem")
 
         try:
-            # Check if the identifier file exists
             if not os.path.exists(identifier_file):
                 raise FileNotFoundError("The identifier.pem file is missing. Please register first.")
 
-            # Read the contents of identifier.pem
             with open(identifier_file, "r") as f:
-                key_string = f.read().strip()  # Remove any trailing whitespace or newlines
+                key_string = f.read().strip()
 
-            # Ensure the key string is not empty
             if not key_string:
                 raise ValueError("The identifier.pem file is empty or corrupted.")
 
-            # Send data to the server
             response = send_to_server("LOGIN", username, password, key_string)
 
-            # Display server response
             messagebox.showinfo("Login Response", response)
+
+            if "Login successful" in response:
+                self.password_entry.grid_remove() 
+                self.login_button.grid_remove()    
+                self.register_button.grid_remove() 
+            
 
         except FileNotFoundError as e:
             messagebox.showerror("Error", f"File Error: {e}")
@@ -310,28 +313,25 @@ class P2PApp:
         identifier_file = os.path.join(script_dir, "identifier.pem")
 
         try:
-            # Check if the identifier.pem file already exists
             if os.path.exists(identifier_file):
                 raise FileExistsError("The identifier.pem file already exists. Registration cannot overwrite the file.")
 
-            # Generate 64 random characters
             chars = string.ascii_letters + string.digits
             random_string = ''.join(secrets.choice(chars) for _ in range(64))
 
-            # Write the random string to the identifier.pem file
             with open(identifier_file, "w") as f:
                 f.write(random_string)
 
             os.chmod(identifier_file, stat.S_IRUSR | stat.S_IWUSR)
 
-            # Notify user that the file was created
             messagebox.showinfo("Key File Generated", "A new identifier.pem file has been created.")
 
-            # Send registration request to the server
             response = send_to_server("REGISTER", username, password, random_string)
 
-            # Display server response
             messagebox.showinfo("Register Response", response)
+
+            if "Register successful" in response:
+                self.register_button.grid_remove() 
 
         except PermissionError as e:
             messagebox.showerror("Error", f"Permission Error: {e}")
