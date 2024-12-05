@@ -26,29 +26,23 @@ def send_to_server(endpoint, username, password, identifier):
     script_dir = os.path.dirname(os.path.abspath(__file__))
     auth_cert_file = os.path.join(script_dir, "authcert.pem")
 
-    # Create a payload
     payload = f"{endpoint.upper()} {username} {password} {identifier}\n"
 
-    # Create an SSL context
     context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
     context.load_verify_locations(auth_cert_file)
 
+    #client only sends one message and server sends one message back
     try:
-        # Create a TCP connection
         with socket.create_connection((server_host, server_port)) as sock:
-            # Wrap the socket with SSL
             with context.wrap_socket(sock, server_hostname=server_host) as secure_sock:
                 print("Connection established with the server.")
                 
-                # Send the payload
                 secure_sock.sendall(payload.encode('utf-8'))
                 print("Payload sent to server.")
 
-                # Read the server's response
                 response = secure_sock.recv(BUFFER_SIZE).decode('utf-8', errors='ignore')
                 print("Response received from server:", response)
 
-                # Close the SSL socket gracefully
                 secure_sock.shutdown(socket.SHUT_RDWR)
                 secure_sock.close()
 
