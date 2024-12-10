@@ -11,14 +11,21 @@ import string
 import stat
 
 # Constants
-DEFAULT_HOST = '127.0.0.1'
 DEFAULT_PORT = 65432
 BUFFER_SIZE = 4096
 CERTFILE = "cert.pem"
 KEYFILE = "key.pem"
 AUTHCERTFILE = "authcert.pem"
 
-def send_to_server(endpoint, username, password, identifier):
+def get_ip():
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        try:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+        except Exception:
+            return "127.0.0.1"
+
+def send_to_server(endpoint, username, password, identifier, ip, port):
     """Sends data to the remote server securely using an SSL socket."""
     server_host = "50.19.225.62"
     server_port = 6223
@@ -205,7 +212,7 @@ class P2PApp:
         # Host and Port Configuration
         tk.Label(root, text="Host:").grid(row=6, column=0, padx=10, pady=5, sticky="e")
         self.host_entry = tk.Entry(root)
-        self.host_entry.insert(0, DEFAULT_HOST)
+        self.host_entry.insert(0, get_ip())
         self.host_entry.grid(row=6, column=1, padx=10, pady=5, sticky="w")
 
         tk.Label(root, text="Port:").grid(row=7, column=0, padx=10, pady=5, sticky="e")
@@ -271,6 +278,8 @@ class P2PApp:
         """Handles the login button click."""
         username = self.username_entry.get()
         password = self.password_entry.get()
+        ip = self.host_entry.get()
+        port = self.port_entry.get()
 
         script_dir = os.path.dirname(os.path.abspath(__file__))
         identifier_file = os.path.join(script_dir, "identifier.pem")
@@ -285,7 +294,7 @@ class P2PApp:
             if not key_string:
                 raise ValueError("The identifier.pem file is empty or corrupted.")
 
-            response = send_to_server("LOGIN", username, password, key_string)
+            response = send_to_server("LOGIN", username, password, key_string, ip, port)
 
             messagebox.showinfo("Login Response", response)
 
@@ -308,6 +317,8 @@ class P2PApp:
         """Handles the register button click with secure key generation."""
         username = self.username_entry.get()
         password = self.password_entry.get()
+        ip = self.host_entry.get()
+        port = self.port_entry.get()
 
         script_dir = os.path.dirname(os.path.abspath(__file__))
         identifier_file = os.path.join(script_dir, "identifier.pem")
@@ -326,7 +337,7 @@ class P2PApp:
 
             messagebox.showinfo("Key File Generated", "A new identifier.pem file has been created.")
 
-            response = send_to_server("REGISTER", username, password, random_string)
+            response = send_to_server("REGISTER", username, password, random_string, ip, port)
 
             messagebox.showinfo("Register Response", response)
 
