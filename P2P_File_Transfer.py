@@ -9,6 +9,8 @@ import zlib
 import secrets
 import string
 import stat
+from dataclasses import dataclass
+import requests
 
 # Constants
 DEFAULT_PORT = 65432
@@ -18,12 +20,12 @@ KEYFILE = "key.pem"
 AUTHCERTFILE = "authcert.pem"
 
 def get_ip():
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-        try:
-            s.connect(("8.8.8.8", 80))
-            return s.getsockname()[0]
-        except Exception:
-            return "127.0.0.1"
+    try:
+        response = requests.get("http://api.ipify.org", timeout=5)
+        response.raise_for_status()
+        return response.text.strip()
+    except requests.RequestException as e:
+        return f"Unable to fetch public ip: {e}"
 
 def send_to_server(endpoint, username, password, identifier, ip, port):
     """Sends data to the remote server securely using an SSL socket."""
@@ -33,7 +35,10 @@ def send_to_server(endpoint, username, password, identifier, ip, port):
     script_dir = os.path.dirname(os.path.abspath(__file__))
     auth_cert_file = os.path.join(script_dir, "authcert.pem")
 
-    payload = f"{endpoint.upper()} {username} {password} {identifier}\n"
+    if endpoint.upper() == "GET":
+        payload = f"GET {username}\n"
+    else:
+        payload = f"{endpoint.upper()} {username} {password} {identifier} {ip} {port}\n"
 
     context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
     context.load_verify_locations(auth_cert_file)
@@ -142,15 +147,37 @@ def handle_client(conn, current_dir, log_callback):
     finally:
         conn.close()
 
-def client(host, port, filename, client_log_callback):
+def client(host, port, filename, client_log_callback, recipiant_username):
     """Runs the P2P client to send a file with integrity verification."""
+    try:
+        # Send a request to the server and get the response
+        response = send_to_server("GET", recipiant_username, None, None, None, None)  
+        print(f"Server response: {response}")
+
+        # Parse the response
+        parts = response.split()
+        if len(parts) != 5 or parts[0] != "GET-RESPONSE" or parts[1] != "VALID":
+            raise ValueError("Invalid response format from server.")
+        
+        recipient_ip = parts[3]
+        recipient_port = int(parts[4])
+        client_log_callback(f"Recipient IP: {recipient_ip}, Port: {recipient_port}")
+    except Exception as e:
+        client_log_callback(f"Error processing server response: {e}")
+        return
+
+    # Prepare the SSL context
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    cert_file = os.path.join(script_dir, CERTFILE)
+
     context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-    context.load_verify_locations(CERTFILE)
+    context.load_verify_locations(cert_file)
 
     try:
-        with socket.create_connection((host, port)) as sock:
-            with context.wrap_socket(sock, server_hostname=host) as secure_socket:
-                client_log_callback(f"Connected to {host}:{port}")
+        # Connect to the recipient using the extracted IP and port
+        with socket.create_connection((recipient_ip, recipient_port)) as sock:
+            with context.wrap_socket(sock, server_hostname=recipient_ip) as secure_socket:
+                client_log_callback(f"Connected to {recipient_ip}:{recipient_port}")
 
                 # Calculate the file's CRC checksum
                 with open(filename, "rb") as f:
@@ -167,13 +194,21 @@ def client(host, port, filename, client_log_callback):
 
                 client_log_callback(f"File {filename} sent successfully.")
     except Exception as e:
-        client_log_callback(f"Error: {e}")
+        client_log_callback(f"Error during file transfer: {e}")
 
 
 class P2PApp:
+    @dataclass
+    class login_state:
+        username: str
+        ip: str
+        port: int
+        logged_in: bool
+
     def __init__(self, root):
         self.root = root
         self.root.title("EZFileShare")
+        self.login_state.logged_in = 0;
 
         # Command queue for server
         self.command_queue = queue.Queue()
@@ -185,6 +220,9 @@ class P2PApp:
         tk.Button(root, text="Start", command=self.start_server).grid(row=2, column=0, padx=10, pady=5)
         tk.Button(root, text="Select Download Directory", command=self.select_download_dir).grid(row=3, column=0, padx=10, pady=5)
 
+        #Friends Section
+        tk.Label(root, text="Friends").grid(row=4, column=0, padx=10, pady=5, sticky="w")
+
         # Username Section
         tk.Label(root, text="Username:").grid(row=4, column=0, padx=10, pady=5, sticky="e")
         self.username_entry = tk.Entry(root)
@@ -193,6 +231,10 @@ class P2PApp:
         # Login Section
         self.login_button = tk.Button(root, text="Login", command=self.login)
         self.login_button.grid(row=4, column=2, padx=10, pady=5, sticky="w")
+
+        # Logout Section
+        self.logout_button = tk.Button(root, text="Logout", command=self.logout)
+        self.logout_button.grid(row=4, column=3, padx=10, pady=5, sticky="w")
 
         # Password Section
         tk.Label(root, text="Password:").grid(row=5, column=0, padx=10, pady=5, sticky="e")
@@ -208,6 +250,9 @@ class P2PApp:
         self.client_log = tk.Text(root, height=10, width=50, state="disabled")
         self.client_log.grid(row=1, column=2, padx=10, pady=5)
         tk.Button(root, text="Select File & Send", command=self.select_and_send_file).grid(row=2, column=2, padx=10, pady=5)
+        tk.Label(root, text="To:").grid(row=2, column=1, padx=10, pady=5, sticky="e")
+        self.to_entry = tk.Entry(root)
+        self.to_entry.grid(row=2, column=2, padx=10, pady=5, sticky="w")
 
         # Host and Port Configuration
         tk.Label(root, text="Host:").grid(row=6, column=0, padx=10, pady=5, sticky="e")
@@ -267,16 +312,21 @@ class P2PApp:
 
     def select_and_send_file(self):
         """Opens a file dialog and sends the selected file."""
+        recipiant_username = self.to_entry.get()
         file_path = filedialog.askopenfilename(title="Select a File")
         if file_path:
             self.client_log_callback(f"Selected file: {file_path}")
             host, port = self.get_host_and_port()
             if host and port:
-                threading.Thread(target=client, args=(host, port, file_path, self.client_log_callback), daemon=True).start()
+                threading.Thread(target=client, args=(host, port, file_path, self.client_log_callback, recipiant_username), daemon=True).start()
 
     def login(self):
         """Handles the login button click."""
         username = self.username_entry.get()
+
+        if len(username) > 16:
+            raise ValueError("Username cannot be longer than 16 characters")
+
         password = self.password_entry.get()
         ip = self.host_entry.get()
         port = self.port_entry.get()
@@ -301,7 +351,11 @@ class P2PApp:
             if "Login successful" in response:
                 self.password_entry.grid_remove() 
                 self.login_button.grid_remove()    
-                self.register_button.grid_remove() 
+                self.register_button.grid_remove()
+                self.login_state.username = username;
+                self.login_state.ip = ip;
+                self.login_state.port = port
+                self.login_state.logged_in = 1;
             
 
         except FileNotFoundError as e:
@@ -316,6 +370,10 @@ class P2PApp:
     def register(self):
         """Handles the register button click with secure key generation."""
         username = self.username_entry.get()
+
+        if len(username) > 16:
+            raise ValueError("Username cannot be longer than 16 characters")
+
         password = self.password_entry.get()
         ip = self.host_entry.get()
         port = self.port_entry.get()
@@ -349,6 +407,9 @@ class P2PApp:
 
         except Exception as e:
             messagebox.showerror("Error", f"An unexpected error occurred: {e}")
+
+    def logout(self):
+        return
 
 if __name__ == "__main__":
     root = tk.Tk()
