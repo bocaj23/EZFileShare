@@ -11,7 +11,8 @@ import string
 import stat
 from dataclasses import dataclass
 import requests
-import time
+import upnpy
+
 
 # Constants
 DEFAULT_PORT = 65432
@@ -265,6 +266,62 @@ def client(username, filename, client_log_callback, recipient_username):
     except Exception as e:
         client_log_callback(f"Error during file transfer: {str(e)}")
 
+def get_default_gateway_windows():
+    import subprocess
+
+    result = subprocess.run(['ipconfig'], capture_output=True, text=True)
+    lines = result.stdout.splitlines()
+
+    for i, line in enumerate(lines):
+        if "Default Gateway" in line:
+            parts = line.split()
+            if parts[-1] != ":":
+                return parts[-1]
+
+    return None
+
+def setup_port_forwarding(default_gateway, port, description="P2P Program"):
+    try:
+        # Initialize UPnP
+        upnp = upnpy.UPnP()
+        
+        # Discover UPnP devices
+        devices = upnp.discover()
+        if not devices:
+            return "No UPnP devices found. Ensure UPnP is enabled on your router."
+
+        # Find the device associated with the default gateway
+        gateway_device = None
+        for device in devices:
+            if default_gateway in device['location']:
+                gateway_device = device
+                break
+
+        if not gateway_device:
+            return f"No UPnP-enabled device found matching the default gateway ({default_gateway})."
+
+        # Select the Internet Gateway Device (IGD)
+        igd = gateway_device['IGD']
+
+        # Get the internal IP address of the host
+        hostname = socket.gethostname()
+        internal_ip = socket.gethostbyname(hostname)
+
+        # Set up port forwarding
+        protocol = 'TCP'
+        igd.AddPortMapping(
+            NewRemoteHost='',  # Empty for all external hosts
+            NewExternalPort=port,
+            NewProtocol=protocol,
+            NewInternalPort=port,
+            NewInternalClient=internal_ip,
+            NewEnabled=1,
+            NewPortMappingDescription=description,
+            NewLeaseDuration=0  # 0 for permanent
+        )
+        return f"Port {port} forwarded successfully to {internal_ip} through {default_gateway}."
+    except Exception as e:
+        return f"Failed to forward port {port}: {e}"
 
 class P2PApp:
     @dataclass
@@ -366,6 +423,13 @@ class P2PApp:
 
     def start_server(self):
         """Starts the server in a separate thread."""
+        dg = get_default_gateway_windows()
+        self.server_log_callback(f"Default gateway: {dg}")
+
+        f_port = 65432
+        forwarding_result = setup_port_forwarding(f_port, dg)
+        self.server_log_callback(forwarding_result)
+
         host, port = self.get_host_and_port()
         if host and port:
             threading.Thread(target=server, args=(host, port, self.command_queue, self.server_log_callback), daemon=True).start()
