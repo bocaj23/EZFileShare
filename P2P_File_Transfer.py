@@ -11,6 +11,7 @@ import string
 import stat
 from dataclasses import dataclass
 import requests
+import time
 
 # Constants
 DEFAULT_PORT = 65432
@@ -34,11 +35,8 @@ def send_to_server(endpoint, username, password, identifier, ip, port):
     
     script_dir = os.path.dirname(os.path.abspath(__file__))
     auth_cert_file = os.path.join(script_dir, "authcert.pem")
-
-    if endpoint.upper() == "GET":
-        payload = f"GET {username}\n"
-    else:
-        payload = f"{endpoint.upper()} {username} {password} {identifier} {ip} {port}\n"
+    
+    payload = f"{endpoint.upper()} {username} {password} {identifier} {ip} {port}\n"
 
     context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
     context.load_verify_locations(auth_cert_file)
@@ -76,19 +74,22 @@ def create_tls_context():
     context.load_cert_chain(certfile=CERTFILE, keyfile=KEYFILE)
     return context
 
-
+#create tls context
+#wait for incoming connection
+#send cert
+#accept incoming connection
 def server(host, port, command_queue, server_log_callback):
     """Runs the P2P server with a command queue for dynamic behavior."""
     context = create_tls_context()
-    current_dir = {"download_dir": os.getcwd()}  # Shared state
+    current_dir = {"download_dir": os.getcwd()}  
 
+    host = "0.0.0.0"
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
         server_socket.bind((host, port))
         server_socket.listen(5)
         server_log_callback(f"Server listening on {host}:{port}")
         with context.wrap_socket(server_socket, server_side=True) as secure_socket:
             while True:
-                # Process commands from the queue
                 try:
                     while not command_queue.empty():
                         command, value = command_queue.get_nowait()
@@ -98,25 +99,50 @@ def server(host, port, command_queue, server_log_callback):
                 except queue.Empty:
                     pass
 
-                # Accept client connections
                 try:
                     conn, addr = secure_socket.accept()
-                    server_log_callback(f"Connection established with {addr}")
-                    threading.Thread(
-                        target=handle_client, 
-                        args=(conn, current_dir, server_log_callback)
-                    ).start()
+                    client_ip = addr[0]
+                    if client_ip == "50.19.225.62":
+                        server_log_callback(f"[SERVER] Connection established with {addr}")
+                        threading.Thread(
+                            target=handle_client_cert_exchange, 
+                            args=(conn, addr, current_dir, server_log_callback)
+                        ).start()
+                    else:
+                        server_log_callback(f"[SERVER] Connection established with {addr}")
+                        threading.Thread(
+                            target=handle_file_transfer, 
+                            args=(conn, addr, current_dir, server_log_callback)
+                        ).start()
                 except ssl.SSLError as e:
                     server_log_callback(f"SSL error: {e}")
 
-
-def handle_client(conn, current_dir, log_callback):
-    """Handles an incoming client connection with file integrity check."""
+def handle_file_transfer(conn, addr, current_dir, log_callback):
+    """Handles the file transfer process."""
     try:
-        # Receive the filename and checksum
-        metadata = conn.recv(BUFFER_SIZE).decode()
-        if not metadata:
+        log_callback(f"[SERVER][RECIPIANT] Connection established with {addr}.")
+
+        # Wait for "CLIENT-READY" signal
+        client_ready_signal = conn.recv(BUFFER_SIZE).decode("utf-8")
+        
+
+        if client_ready_signal != "CLIENT-READY":
+            log_callback(f"Unexpected signal from client: {client_ready_signal}")
             return
+
+        log_callback(f"[SERVER][RECIPIANT] Client Ready...")
+
+
+        # Send readiness signal to client
+        payload = "SERVER-READY"
+        conn.sendall(payload.encode("utf-8"))
+
+        # Receive metadata
+        metadata = conn.recv(BUFFER_SIZE).decode("utf-8")
+        if not metadata or "|" not in metadata:
+            log_callback("Invalid or empty metadata received. Closing connection.")
+            return
+
         filename, expected_checksum = metadata.split("|")
         expected_checksum = int(expected_checksum)
 
@@ -124,77 +150,120 @@ def handle_client(conn, current_dir, log_callback):
         download_dir = current_dir["download_dir"]
         file_path = os.path.join(download_dir, filename)
 
-        # Receive the file data
+        # Receive file data
         with open(file_path, "wb") as f:
             while True:
                 data = conn.recv(BUFFER_SIZE)
-                if not data:
+                if not data or data == b"EOF":
                     break
                 f.write(data)
 
-        # Calculate the checksum of the received file
+        # Verify checksum
         with open(file_path, "rb") as f:
             file_data = f.read()
             actual_checksum = zlib.crc32(file_data)
 
-        # Verify the checksum
         if actual_checksum == expected_checksum:
-            log_callback(f"File {filename} received successfully to {file_path} (Checksum Verified).")
+            log_callback(f"File {filename} received successfully at {file_path} (Checksum verified).")
         else:
-            log_callback(f"File {filename} received to {file_path}, but checksum mismatch! Expected: {expected_checksum}, Got: {actual_checksum}")
+            log_callback(f"Checksum mismatch for {filename}! Expected: {expected_checksum}, Got: {actual_checksum}")
     except Exception as e:
-        log_callback(f"Error: {e}")
-    finally:
-        conn.close()
+        log_callback(f"Error during file transfer: {e}")
 
-def client(host, port, filename, client_log_callback, recipiant_username):
+def handle_client_cert_exchange(conn, addr, current_dir, log_callback):
+    """Handles an incoming client connection."""
+    try:
+        ###################################### FIRST SEND CERT AS PAYLOAD
+        with open('cert.pem', 'r') as file:
+            payload = file.read()
+
+        
+        conn.sendall(payload.encode('utf-8'))
+        log_callback(f"[SERVER] Certificate sent to {addr}. Closing connection to auth server")
+        #####################################
+    except Exception as e:
+        log_callback(f"Unexpected error with {addr}: {e}")
+    finally:
+        try:
+            conn.close()
+            log_callback(f"Connection with {addr} closed.")
+        except Exception as e:
+            log_callback(f"Error closing connection: {e}")
+
+def client(username, filename, client_log_callback, recipient_username):
     """Runs the P2P client to send a file with integrity verification."""
     try:
-        # Send a request to the server and get the response
-        response = send_to_server("GET", recipiant_username, None, None, None, None)  
-        print(f"Server response: {response}")
+        # Fetch recipient information
+        client_log_callback("[CLIENT][AUTH_SERVER][GET PACKET 1] Seeing if recipiant exists")
+        response = send_to_server("GET", recipient_username, None, None, None, None)
+        client_log_callback(f"Server response: {response}")
 
-        # Parse the response
         parts = response.split()
-        if len(parts) != 5 or parts[0] != "GET-RESPONSE" or parts[1] != "VALID":
-            raise ValueError("Invalid response format from server.")
-        
+        if len(parts) != 5:
+            client_log_callback("Invalid response format from server")
+            return
+        client_log_callback("[CLIENT][AUTH_SERVER][GET PACKET 1] Packet format correct")
+
+        if parts[0] != "GET-RESPONSE" or parts[1] != "VALID":
+            client_log_callback("Recipient not found or not online")
+            return
+        client_log_callback("[CLIENT][GET PACKET 1]Packet content correct")
+
         recipient_ip = parts[3]
         recipient_port = int(parts[4])
-        client_log_callback(f"Recipient IP: {recipient_ip}, Port: {recipient_port}")
-    except Exception as e:
-        client_log_callback(f"Error processing server response: {e}")
-        return
 
-    # Prepare the SSL context
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    cert_file = os.path.join(script_dir, CERTFILE)
+        client_log_callback("[CLIENT][AUTH_SERVER][INITIATE] Sending initiate packet")
+        response = send_to_server("INITIATE", username, None, None, recipient_ip, recipient_port)
+        client_log_callback(f"[CLIENT][AUTH_SERVER][INITATE] Response received")
 
-    context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-    context.load_verify_locations(cert_file)
+        with open('client_cert.pem', 'w') as file:
+            file.write(response)
 
-    try:
-        # Connect to the recipient using the extracted IP and port
+
+        context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+        context.load_verify_locations(cafile="client_cert.pem")
+        context.check_hostname = False
+
         with socket.create_connection((recipient_ip, recipient_port)) as sock:
-            with context.wrap_socket(sock, server_hostname=recipient_ip) as secure_socket:
-                client_log_callback(f"Connected to {recipient_ip}:{recipient_port}")
+            with context.wrap_socket(sock, server_hostname=recipient_ip) as secure_sock:
+                client_log_callback(f"[SERVER][RECIPIANT] Connected to recipient at {recipient_ip}:{recipient_port}")
+                client_log_callback(f"[SERVER][RECIPIANT] Sending ready message...")
+                ready_signal = "CLIENT-READY"
+                secure_sock.sendall(ready_signal.encode('utf-8'))
 
-                # Calculate the file's CRC checksum
+                client_log_callback(f"[SERVER][RECIPIANT] Ready message sent, waiting for server...")
+                ready_signal = secure_sock.recv(BUFFER_SIZE).decode("utf-8")
+                if ready_signal != "SERVER-READY":
+                    client_log_callback(f"Unexpected signal from server: {ready_signal}")
+                    return
+
+                client_log_callback("[CLIENT][RECIPIANT] Server is ready. Preparing to send metadata and file...")
+
+                # Send metadata
                 with open(filename, "rb") as f:
                     file_data = f.read()
                     checksum = zlib.crc32(file_data)
+                    metadata = f"{os.path.basename(filename)}|{checksum}"
+                    secure_sock.sendall(metadata.encode("utf-8"))
+                    client_log_callback(f"Sent metadata: {metadata}")
 
-                # Send the filename and checksum
-                secure_socket.sendall(f"{os.path.basename(filename)}|{checksum}".encode())
-
-                # Send the file content
-                with open(filename, "rb") as f:
+                    # Reset the file pointer and send the file
+                    f.seek(0)
                     while chunk := f.read(BUFFER_SIZE):
-                        secure_socket.sendall(chunk)
+                        secure_sock.sendall(chunk)
 
-                client_log_callback(f"File {filename} sent successfully.")
+                      # Send EOF marker explicitly
+                    secure_sock.sendall(b"EOF")
+                    client_log_callback(f"File {filename} sent successfully.")
+
+    except socket.timeout:
+        client_log_callback("Connection timed out. The recipient might be offline or unreachable.")
+    except ConnectionRefusedError:
+        client_log_callback("Connection refused. The recipient's file sharing service might not be running.")
+    except ssl.SSLError as e:
+        client_log_callback(f"SSL Error: {e}")
     except Exception as e:
-        client_log_callback(f"Error during file transfer: {e}")
+        client_log_callback(f"Error during file transfer: {str(e)}")
 
 
 class P2PApp:
@@ -313,12 +382,13 @@ class P2PApp:
     def select_and_send_file(self):
         """Opens a file dialog and sends the selected file."""
         recipiant_username = self.to_entry.get()
+        username = self.username_entry.get()
         file_path = filedialog.askopenfilename(title="Select a File")
         if file_path:
             self.client_log_callback(f"Selected file: {file_path}")
             host, port = self.get_host_and_port()
             if host and port:
-                threading.Thread(target=client, args=(host, port, file_path, self.client_log_callback, recipiant_username), daemon=True).start()
+                threading.Thread(target=client, args=(username, file_path, self.client_log_callback, recipiant_username), daemon=True).start()
 
     def login(self):
         """Handles the login button click."""
