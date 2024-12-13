@@ -289,6 +289,7 @@ def setup_port_forwarding(default_gateway, port, description="P2P Program"):
         devices = upnp.discover()
         if not devices:
             return "No UPnP devices found. Ensure UPnP is enabled on your router."
+        print(devices)
 
         # Find the device associated with the default gateway
         gateway_device = None
