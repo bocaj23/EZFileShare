@@ -32,8 +32,8 @@ def get_machine_ip():
         print(f"Error getting the machine's IP address: {e}")
         return None
 
-#host = get_machine_ip()
-host = '127.0.0.1'
+host = '0.0.0.0'
+#host = '127.0.0.1'
 
 def log_message(widget, message):
     """Logs a message to a specific Text widget."""
@@ -49,25 +49,22 @@ def server_log_callback(message):
 
 def load_user_data():
     """Loads user data from a JSON file."""
-    global user_database
     try:
         with open(USER_DATA_FILE, "r") as f:
             user_database = json.load(f)
+            if not isinstance(user_database, dict):  # Ensure it's a dictionary
+                raise ValueError("User data is not a dictionary")
+            return user_database  
     except FileNotFoundError:
         server_log_callback(f"User data file {USER_DATA_FILE} not found. Creating a default one.")
-        default_data = {
-            "admin": {
-                "password": "password",
-                "ip": "127.0.0.1",
-                "port": 5001
-            }
-        }
+        user_database = {}
         with open(USER_DATA_FILE, "w") as f:
-            json.dump(default_data, f, indent=4)
-        
+            json.dump(user_database, f, indent=4)
+        return user_database  
+    
     except json.JSONDecodeError:
         server_log_callback(f"Error decoding {USER_DATA_FILE}. Ensure it is valid JSON.")
-        user_database = {}
+        return {}  
 
 
 def handle_register_request(conn, register_message):
@@ -84,13 +81,6 @@ def handle_register_request(conn, register_message):
         # Hash the password using bcrypt
         hashed_password = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
-        # Prepare user data
-        user_data = {
-            "password": hashed_password,
-            "ip": ip,
-            "port": int(port)
-        }
-
         # Load existing data
         try:
             with open(USER_DATA_FILE, "r") as file:
@@ -101,6 +91,16 @@ def handle_register_request(conn, register_message):
         # Check if the user already exists
         if user in data:
             conn.sendall(f"REGISTER_FAIL|{user}|User '{user}' already exists.".encode())
+            return
+
+        # Prepare user data
+        user_data = {
+            "password": hashed_password,
+            "ip": ip,
+            "port": int(port),
+            "friends": [],
+            "friend_requests":[]
+        }
 
         # Update data with new user
         data[user] = user_data
@@ -121,9 +121,7 @@ def handle_login_request(conn, request, addr):
     """Handles login requests from the client."""
     global user_database
     try:
-
-        load_user_data()
-
+        user_database = load_user_data()
         request_type, username, password = request.split("|")
 
         # Retrieve user data
@@ -134,7 +132,16 @@ def handle_login_request(conn, request, addr):
             with active_users_lock:
                 active_users[username] = {"ip": addr[0], "port": addr[1], "conn": conn}
             server_log_callback(f"User {username} logged in from {addr}")
-            response = f"LOGIN_SUCCESS|{username}"
+            friends_list = ",".join(user_data.get("friends", []))
+            friend_requests_list = ",".join(user_data.get("friend_requests", []))
+            response = f"LOGIN_SUCCESS|{username}|{friends_list}|{friend_requests_list}"
+            
+            # Clear the friend requests list after sending the response
+            user_data["friend_requests"] = []
+            
+            # Update the user data file
+            with open(USER_DATA_FILE, "w") as file:
+                json.dump(user_database, file, indent=4)
         else:
             response = f"LOGIN_FAIL|{username}"
 
@@ -190,6 +197,14 @@ def handle_request_to_send(sender, recipient, filename):
                 sender_conn = active_users[sender]["conn"]
             sender_conn.sendall(f"FILE_TRANSFER_FAIL|User {recipient} does not exist.".encode())
             server_log_callback(f"File transfer request from {sender} failed: User {recipient} does not exist.")
+            return
+
+        # Check if the sender is in the recipient's friends list
+        if sender not in user_data[recipient]["friends"]:
+            with active_users_lock:
+                sender_conn = active_users[sender]["conn"]
+            sender_conn.sendall(f"FILE_TRANSFER_FAIL|User {recipient} is not in your friends list.".encode())
+            server_log_callback(f"File transfer request from {sender} to {recipient} failed: Not in recipient's friends list.")
             return
 
         # Check if recipient is online
@@ -277,12 +292,7 @@ def handle_add_friend_request(sender, recipient):
     """Handles an add friend request."""
     try:
         # Load user data from the file
-        try:
-            with open(USER_DATA_FILE, "r") as file:
-                user_data = json.load(file)
-        except FileNotFoundError:
-            server_log_callback("User data file not found.")
-            return
+        user_data = load_user_data()
 
         # Check if recipient exists in user data
         if recipient not in user_data:
@@ -290,6 +300,14 @@ def handle_add_friend_request(sender, recipient):
                 sender_conn = active_users[sender]["conn"]
             sender_conn.sendall(f"FRIEND_REQUEST_FAIL|User {recipient} does not exist.".encode())
             server_log_callback(f"Friend request from {sender} failed: User {recipient} does not exist.")
+            return
+
+        # Check if sender is already in recipient's friends list
+        if sender in user_data[recipient].get("friends", []):
+            with active_users_lock:
+                sender_conn = active_users[sender]["conn"]
+            sender_conn.sendall(f"FRIEND_REQUEST_FAIL|{recipient} is already your friend.".encode())
+            server_log_callback(f"Friend request from {sender} to {recipient} failed: Already friends.")
             return
 
         # Check if recipient is online
@@ -301,9 +319,22 @@ def handle_add_friend_request(sender, recipient):
                 recipient_conn.sendall(friend_request_message.encode())
                 server_log_callback(f"Friend request from {sender} forwarded to {recipient}.")
             else:
-                sender_conn = active_users[sender]["conn"]
-                sender_conn.sendall(b"FRIEND_REQUEST_FAIL|Recipient not online.")
-                server_log_callback(f"Failed to send friend request from {sender} to {recipient}: Recipient not online.")
+                # Check if sender is already in recipient's friend requests list
+                if sender not in user_data[recipient].get("friend_requests", []):
+                    # Add sender to recipient's friend request list
+                    user_data[recipient]["friend_requests"].append(sender)
+                    
+                    # Save updated user data
+                    with open(USER_DATA_FILE, "w") as file:
+                        json.dump(user_data, file, indent=4)
+                    
+                    sender_conn = active_users[sender]["conn"]
+                    sender_conn.sendall(f"FRIEND_REQUEST_SAVED|{recipient} offline.".encode())
+                    server_log_callback(f"Friend request from {sender} to {recipient} saved: Recipient offline.")
+                else:
+                    sender_conn = active_users[sender]["conn"]
+                    sender_conn.sendall(f"FRIEND_REQUEST_FAIL|Request already sent.".encode())
+                    server_log_callback(f"Friend request from {sender} to {recipient} ignored: Already sent.")
     except ValueError:
         server_log_callback(f"Invalid message format for friend request from {sender} to {recipient}.")
     except KeyError:
@@ -313,51 +344,35 @@ def handle_add_friend_request(sender, recipient):
     except Exception as e:
         server_log_callback(f"Error handling friend request from {sender} to {recipient}: {e}")
 
-def handle_remove_friend(message):
-    """
-    Handles forwarding a message from sender to recipient.
-    
-    :param message: The incoming message in the format "ACTION|SENDER|RECIPIENT|..."
-    :param active_users: Dictionary of active users with connection details.
-    :param active_users_lock: Lock to ensure thread-safe access to active_users.
-    :param server_log_callback: Function to log server events.
-    """
+def handle_remove_friend(sender, recipient):
+    """Handles the removal of a friend from both users' friend lists."""
     try:
-        # Parse the incoming message
-        parts = message.split("|")
-        if len(parts) < 3:
-            server_log_callback(f"Invalid message format: {message}")
-            return
+        user_data = load_user_data()
 
-        action, sender, recipient = parts[:3]
+        # Remove each user from the other's friend list
+        if sender in user_data and recipient in user_data:
+            user_data[sender]["friends"].remove(recipient)
+            user_data[recipient]["friends"].remove(sender)
 
-        # Ensure the action is valid
-        if action not in ("FRIEND_REQUEST_ACCEPT", "FRIEND_REQUEST_DECLINE", "REMOVE_FRIEND"):
-            server_log_callback(f"Invalid action in message: {action}")
-            return
+            # Save updated user data
+            with open(USER_DATA_FILE, "w") as file:
+                json.dump(user_data, file, indent=4)
 
-        sender_conn = None
-        recipient_conn = None
+            # Notify sender if online
+            with active_users_lock:
+                if sender in active_users:
+                    sender_conn = active_users[sender]["conn"]
+                    sender_friends = ",".join(user_data[sender]["friends"])
+                    sender_conn.sendall(f"UPDATE_FRIENDS|{sender}|{sender_friends}".encode())
 
-        # Access active users safely
-        with active_users_lock:
-            sender_conn = active_users.get(sender, {}).get("conn")
-            recipient_conn = active_users.get(recipient, {}).get("conn")
-
-        if not sender_conn:
-            server_log_callback(f"Sender {sender} is not online. Cannot forward response.")
-            return
-
-        if not recipient_conn:
-            server_log_callback(f"Recipient {recipient} is not online. Cannot forward response.")
-            return
-
-        # Forward the message to the recipient
-        recipient_conn.sendall(message.encode())
-        server_log_callback(f"Message forwarded from {sender} to {recipient}: {message}")
-
+                # Notify recipient if online
+                if recipient in active_users:
+                    recipient_conn = active_users[recipient]["conn"]
+                    recipient_friends = ",".join(user_data[recipient]["friends"])
+                    recipient_conn.sendall(f"UPDATE_FRIENDS|{recipient}|{recipient_friends}".encode())
     except Exception as e:
-        server_log_callback(f"Error handling forward message: {e}")
+        server_log_callback(f"Error handling friend removal between {sender} and {recipient}: {e}")
+
 
 def handle_friend_response(message):
     """Handles a friend request response with the format FRIEND_REQUEST_ACCEPT|{sender}|{recipient} 
@@ -376,64 +391,62 @@ def handle_friend_response(message):
             server_log_callback(f"Invalid action in message: {action}")
             return
 
+        user_data = load_user_data()
+
         sender_conn = None
         recipient_conn = None
 
-        # Access active users safely
-        with active_users_lock:
-            if sender in active_users:
-                sender_conn = active_users[sender]["conn"]
-            else:
-                server_log_callback(f"Sender {sender} is not online. Cannot forward response.")
-                return
-
-            if recipient in active_users:
-                recipient_conn = active_users[recipient]["conn"]
-            else:
-                server_log_callback(f"Recipient {recipient} is not online. Cannot forward response.")
-                return
-
         # Handle ACCEPT or DECLINE responses
         if action == "FRIEND_REQUEST_ACCEPT":
-            try:
-                # Fetch sender's and recipient's information from data.json
-                with open("data.json", "r") as user_file:
-                    user_data = json.load(user_file)
-                    sender_data = user_data.get(sender)
-                    recipient_data = user_data.get(recipient)
+            # Update friends list for both users
+            if sender in user_data and recipient in user_data:
+                user_data[sender]["friends"].append(recipient)
+                user_data[recipient]["friends"].append(sender)
 
-                if sender_data and recipient_data:
-                    sender_ip = sender_data["ip"]
-                    sender_port = sender_data["port"]
-                    recipient_ip = recipient_data["ip"]
-                    recipient_port = recipient_data["port"]
+                # Save updated user data
+                with open(USER_DATA_FILE, "w") as file:
+                    json.dump(user_data, file, indent=4)
 
-                    # Notify the sender with recipient's information
-                    sender_response = f"FRIEND_REQUEST_ACCEPTED|{sender}|{recipient}|{recipient_ip}|{recipient_port}"
-                    sender_conn.sendall(sender_response.encode())
-                    server_log_callback(f"Friend request accepted by {recipient}. Info sent to {sender}.")
+                # Notify sender if online
+                with active_users_lock:
+                    if sender in active_users:
+                        sender_conn = active_users[sender]["conn"]
+                        sender_friends = ",".join(user_data[sender]["friends"])
+                        sender_conn.sendall(f"UPDATE_FRIENDS|{sender}|{sender_friends}".encode())
+                    else:
+                        server_log_callback(f"Sender {sender} is not online. Cannot forward response.")
 
-                    # Notify the recipient with sender's information
-                    recipient_response = f"FRIEND_REQUEST_ACCEPTED|{sender}|{recipient}|{sender_ip}|{sender_port}"
-                    recipient_conn.sendall(recipient_response.encode())
-                    server_log_callback(f"Sender {sender}'s info sent to {recipient}.")
-                else:
-                    error_message = f"FRIEND_REQUEST_FAIL|{sender}|Recipient or sender data not found"
-                    sender_conn.sendall(error_message.encode())
-            except Exception as e:
-                server_log_callback(f"Error reading user data or sending response: {e}")
+                    # Notify recipient if online
+                    if recipient in active_users:
+                        recipient_conn = active_users[recipient]["conn"]
+                        recipient_friends = ",".join(user_data[recipient]["friends"])
+                        recipient_conn.sendall(f"UPDATE_FRIENDS|{recipient}|{recipient_friends}".encode())
+                    else:
+                        server_log_callback(f"Recipient {recipient} is not online. Cannot forward response.")
 
         elif action == "FRIEND_REQUEST_DECLINE":
-            try:
-                # Notify the sender of the declined request
-                response_message = f"FRIEND_REQUEST_DECLINED|{sender}|{recipient}"
-                sender_conn.sendall(response_message.encode())
-                server_log_callback(f"Friend request declined by {recipient}. Notification sent to {sender}.")
-            except Exception as e:
-                server_log_callback(f"Error sending decline notification: {e}")
+            response_message = f"FRIEND_REQUEST_DECLINED|{sender}|{recipient}"
+
+            with active_users_lock:
+                # Notify the sender if online
+                if sender in active_users:
+                    sender_conn = active_users[sender]["conn"]
+                    sender_conn.sendall(response_message.encode())
+                    server_log_callback(f"Friend request declined by {recipient}. Notification sent to {sender}.")
+                else:
+                    server_log_callback(f"Sender {sender} is not online. Cannot notify about decline.")
+
+                # Notify the recipient if online
+                #if recipient in active_users:
+                    #recipient_conn = active_users[recipient]["conn"]
+                    #recipient_conn.sendall(response_message.encode())
+                    #server_log_callback(f"Decline notification also sent to recipient {recipient}.")
+                #else:
+                    #server_log_callback(f"Recipient {recipient} is not online. Cannot notify about decline.")
 
     except Exception as e:
         server_log_callback(f"Error handling friend request response: {e}")
+
 
 def handle_client(conn, addr):
     """Handles an incoming client connection with support for persistent connections."""
@@ -451,6 +464,7 @@ def handle_client(conn, addr):
                 if request.startswith("LOGIN"):
                     handle_login_request(conn, request, addr)
                     username = request.split('|')[1]
+
                 elif request.startswith("REGISTER|"):  # Handle periodic updates
                     server_log_callback(f"Register request received: {request}")
                     handle_register_request(conn, request)
@@ -475,7 +489,8 @@ def handle_client(conn, addr):
                     handle_add_friend_request(sender, recipient)
                 
                 elif request.startswith("REMOVE_FRIEND|"):
-                    handle_remove_friend(request)
+                    _, sender, recipient = request.split("|")
+                    handle_remove_friend(sender, recipient)
 
                 elif request.startswith("FRIEND_REQUEST_ACCEPT|"):  # Handle friend request responses
                     #conn.sendall(b"Friend Request Received")

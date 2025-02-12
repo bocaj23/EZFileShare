@@ -11,9 +11,10 @@ import shutil
 import time
 import json
 import sys
+import requests
+import traceback
 
 # Constants
-DEFAULT_HOST = '127.0.0.1' # Default Host for File Transfer
 DEFAULT_PORT = 65432 # Default Port for File Transfer
 USER_DATA_SERVER_HOST = '127.0.0.1' # Host for the user data server
 #USER_DATA_SERVER_HOST = '192.168.56.1'
@@ -34,7 +35,8 @@ download_dir = os.getcwd()
 selected_filepath = None
 command_queue = queue.Queue()
 stop_file_server = False
-friends_list = {}
+friends_list = []
+friend_requests = []
 selected_friend = None
 selected_friend_label = None
 persistent_secure_socket = None
@@ -42,6 +44,18 @@ server_ssl_context = None
 client_ssl_context = None
 file_client_ssl_context = None
 username = None
+
+def get_ip():
+    try:
+        response = requests.get("http://api.ipify.org", timeout=5)
+        response.raise_for_status()
+        #print(response.text.strip())
+        return response.text.strip()
+    except requests.RequestException as e:
+        return f"Unable to fetch public ip: {e}"
+    
+#default_host = get_ip()
+default_host = '127.0.0.1'
 
 def initialize_server_ssl_context():
     """Initializes the Server SSL context."""
@@ -223,30 +237,33 @@ def listen_for_server_messages():
                 if not message:
                     break
 
-                # Handle FRIEND_REQUEST_ACCEPTED messages
-                if message.startswith("FRIEND_REQUEST_ACCEPTED"):
-                    _, sender, recipient, ip, port = message.split("|")
-                    handle_friend_request_accepted(sender, recipient, ip, port)
-                    client_log_callback(f"Friend request from {sender} to {recipient} was accepted.")
+                # Handle UPDATE_FRIENDS messages
+                if message.startswith("UPDATE_FRIENDS|"):
+                    try:
+                        _, username, friends_data = message.split("|", 2)  # Allow the friends list to contain commas
+                        update_friends_list(friends_list_widget, friends_data)
+                        server_log_callback(f"Friends List Updated")
+                    except ValueError:
+                        server_log_callback("Error: Malformed UPDATE_FRIENDS message received.")
 
                 # Handle FRIEND_REQUEST_DECLINED messages
                 elif message.startswith("FRIEND_REQUEST_DECLINED"):
                     _, sender, recipient = message.split("|")
-                    client_log_callback(f"Friend request from {sender} to {recipient} was declined.")
-                
+                    server_log_callback(f"Friend request from {sender} to {recipient} was declined.")
+
+                elif message.startswith("FRIEND_REQUEST_SAVED"):
+                    _, recipient = message.split("|")
+                    server_log_callback(f"Friend Request Received: {recipient}")
+
                 elif message.startswith("FRIEND_REQUEST_FAIL"):
                     _, error = message.split("|")
-                    client_log_callback(f"{error}")
+                    server_log_callback(f"{error}")
 
                 # Handle FRIEND_REQUEST messages
                 elif message.startswith("FRIEND_REQUEST"):
                     _, sender, recipient = message.split("|")
-                    client_log_callback(f"Friend request received from {sender}.")
+                    server_log_callback(f"Friend request received from {sender}.")
                     handle_friend_request(sender, recipient)
-
-                elif message.startswith("REMOVE_FRIEND"):
-                    _, sender, recipient = message.split("|")
-                    handle_remove_friend(sender)
 
                 elif message.startswith("REQUEST_FILE_TRANSFER"):
                     #format for message REQUEST_FILE_TRANSFER|{sender}|{recipient}|{filename}
@@ -257,7 +274,7 @@ def listen_for_server_messages():
                 
                 elif message.startswith("FILE_TRANSFER_DECLINE"):
                     _, sender, recipient = message.split("|")
-                    client_log_callback(f"File transfer request to {recipient} declined.")
+                    server_log_callback(f"File transfer request to {recipient} declined.")
 
                 elif message.startswith("FILE_TRANSFER_FAIL"):
                     _, error = message.split("|")
@@ -265,18 +282,18 @@ def listen_for_server_messages():
 
                 # Handle UPDATE_SUCCESS messages
                 elif message.startswith("UPDATE_SUCCESS"):
-                    client_log_callback("User Update Successful.")
+                    server_log_callback("User Update Successful.")
 
                 else:
                     # Log other incoming messages
-                    client_log_callback(f"Received message: {message}")
+                    server_log_callback(f"Received message: {message}")
 
             except Exception as e:
-                client_log_callback(f"Error receiving or processing message: {e}")
+                server_log_callback(f"Error receiving or processing message: {e}")
                 break
 
     except Exception as e:
-        client_log_callback(f"Listener thread encountered an error: {e}")
+        server_log_callback(f"Listener thread encountered an error: {e}")
 
 
 def send_request_to_send():
@@ -311,29 +328,10 @@ def handle_request_to_send(message):
     """Opens a Tkinter dialog box to ask the user to accept or reject a file transfer request."""
     _, sender, recipient, filename = message.split("|")
 
-    # Load friend list from friends.json
-    try:
-        with open(friendfile, "r") as file:
-            friends = json.load(file)
-    except FileNotFoundError:
-        client_log_callback("Friends file not found.")
-        send_message(f"FILE_TRANSFER_DECLINE|{sender}|{recipient}")
-        return
-    except json.JSONDecodeError:
-        client_log_callback("Invalid friends file format.")
-        send_message(f"FILE_TRANSFER_DECLINE|{sender}|{recipient}")
-        return
-
-    # Check if the sender is in the friend list
-    if sender not in friends:
-        client_log_callback(f"File Transfer Request from {sender} automatically declined (not in friend list).")
-        send_message(f"FILE_TRANSFER_DECLINE|{sender}|{recipient}")
-        return
-
     def on_rts_accept():
         # User accepts the file transfer request
         start_server()
-        send_message(f"FILE_TRANSFER_ACCEPT|{sender}|{recipient}|{DEFAULT_HOST}|{DEFAULT_PORT}")
+        send_message(f"FILE_TRANSFER_ACCEPT|{sender}|{recipient}|{default_host}|{DEFAULT_PORT}")
         client_log_callback(f"File Transfer Request from {sender} accepted.")
         root.destroy()  # Close the dialog box
 
@@ -397,7 +395,7 @@ def handle_request_to_send_accepted(message):
             f"Starting file transfer to {recipient} at {recipient_ip}:{recipient_port} with file {selected_filepath}"
         )
         #client(recipient_ip, recipient_port, selected_filepath)
-        client(DEFAULT_HOST, DEFAULT_PORT, selected_filepath)
+        client(default_host, DEFAULT_PORT, selected_filepath)
 
     except ValueError as ve:
         client_log_callback(f"Invalid port in message: {ve}")
@@ -405,12 +403,29 @@ def handle_request_to_send_accepted(message):
         client_log_callback(f"Error handling file transfer acceptance: {e}")
 
 
+def process_friend_requests():
+    """Processes each friend request one by one and removes it from the list after handling."""
+    global friend_requests
+
+    if not friend_requests:
+        return  # No friend requests to process
+
+    # Get the first request from the list
+    next_request = friend_requests.pop(0)
+
+    # Assume the request is from 'next_request' to the current user
+    handle_friend_request(next_request, username)
+
+    # After handling the request, continue to the next one
+    process_friend_requests()
+
+
 def handle_friend_request(sender, recipient):
     """Opens a Tkinter dialog box to ask the user to accept or reject a friend request."""
     def on_accept():
         # User accepts the friend request
         send_message(f"FRIEND_REQUEST_ACCEPT|{sender}|{recipient}")
-        client_log_callback(f"Friend request from {sender} accepted.")
+        server_log_callback(f"Friend request from {sender} accepted.")
         root.destroy()  # Close the dialog box
 
     def on_decline():
@@ -439,116 +454,9 @@ def handle_friend_request(sender, recipient):
     root.mainloop()
 
 
-def handle_friend_request_accepted(sender, recipient, ip, port):
-    """Handles the entire friend request accepted message."""
-    try:
-        if recipient == username:
-            # Ensure required fields are present
-            if not sender or not ip or not port:
-                server_log_callback(f"Missing data in FRIEND_REQUEST_ACCEPTED message")
-                return
-
-            # Read existing friends from FRIENDS_FILE
-            try:
-                with open(friendfile, "r") as friends_file:
-                    friends_data = json.load(friends_file)
-            except FileNotFoundError:
-                friends_data = {}
-
-            # Add new friend data
-            friends_data[sender] = {"ip": ip, "port": port}
-
-            # Write back to FRIENDS_FILE
-            with open(friendfile, "w") as friends_file:
-                json.dump(friends_data, friends_file, indent=4)
-
-            update_friends_list(friends_list_widget)
-            server_log_callback(f"Added {sender} to friends list with IP {ip} and Port {port}.")
-
-        else:
-            # Ensure required fields are present
-            if not recipient or not ip or not port:
-                server_log_callback(f"Missing data in FRIEND_REQUEST_ACCEPTED message")
-                return
-
-            # Read existing friends from FRIENDS_FILE
-            try:
-                with open(friendfile, "r") as friends_file:
-                    friends_data = json.load(friends_file)
-            except FileNotFoundError:
-                friends_data = {}
-
-            # Add new friend data
-            friends_data[recipient] = {"ip": ip, "port": port}
-
-            # Write back to FRIENDS_FILE
-            with open(friendfile, "w") as friends_file:
-                json.dump(friends_data, friends_file, indent=4)
-
-            update_friends_list(friends_list_widget)
-            server_log_callback(f"Added {recipient} to friends list with IP {ip} and Port {port}.")
-
-    except Exception as e:
-        server_log_callback(f"Error processing FRIEND_REQUEST_ACCEPTED message: {e}")
-
-def handle_remove_friend(sender):
-    """
-    Handles removing a sender from the friends list in the friends.json file.
-
-    :param sender: The sender to remove from the friends file.
-    :param server_log_callback: Function to log server events.
-    """
-    try:
-        # Load the current friends data
-        friends_data = {}
-        try:
-            with open(friendfile, "r") as file:
-                friends_data = json.load(file)
-        except FileNotFoundError:
-            server_log_callback(f"Friends file not found. Cannot remove {sender}.")
-            return
-
-        # Check if the sender exists in the friends file
-        if sender not in friends_data:
-            server_log_callback(f"Sender {sender} not found in friends list.")
-            return
-
-        # Remove the sender
-        del friends_data[sender]
-
-        # Save the updated friends data
-        with open(friendfile, "w") as file:
-            json.dump(friends_data, file, indent=4)
-        
-        update_friends_list(friends_list_widget)
-
-        server_log_callback(f"{sender} has unfriended you.")
-
-    except Exception as e:
-        server_log_callback(f"Error removing friend {sender}: {e}")
-
-def load_friends():
-    """Loads the friends list from the JSON file."""
-    try:
-        with open(friendfile, "r") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        # If the file doesn't exist, return an empty dictionary
-        return {}
-    except json.JSONDecodeError:
-        # If the JSON file is corrupted, return an empty dictionary
-        return {}
-
-def save_friends(friends):
-    """Saves the friends list to the JSON file."""
-    try:
-        with open(friendfile, "w") as f:
-            json.dump(friends, f, indent=4)
-    except Exception as e:
-        client_log_callback(f"Error saving friends list: {e}")
-
 def send_friend_request():
     """ Sends a friend request to the server and handles the response. """
+    global friends_list
     try:
         # Ensure the persistent connection is established
         if persistent_secure_socket is None:
@@ -559,6 +467,10 @@ def send_friend_request():
         recipient = simpledialog.askstring("Add Friend", "Enter friend's name:")
         if recipient is None:
             return
+        elif recipient in friends_list:
+            server_log_callback(f"{recipient} already in friends list.")
+            return
+        
         request_message = f"ADD_FRIEND|{sender}|{recipient}"
         send_message(request_message)
         client_log_callback(f"Friend Request Sent to {recipient}.")
@@ -569,7 +481,9 @@ def send_friend_request():
         return f"An error occurred while processing the friend request: {e}"
 
 def remove_friend():
+    global friends_list  # Reference the global friends list
     sender = username
+
     try:
         # Get the selected friend from the Listbox
         selected_friend = friends_list_widget.get(tk.ACTIVE)
@@ -577,16 +491,8 @@ def remove_friend():
             messagebox.showerror("Error", "No friend selected!")
             return
 
-        # Load the current friends data from the file
-        try:
-            with open(friendfile, "r") as file:
-                friends_data = json.load(file)
-        except FileNotFoundError:
-            messagebox.showerror("Error", "Friends file not found.")
-            return
-
-        # Check if the selected friend exists in the file
-        if selected_friend in friends_data:
+        # Check if the selected friend exists in friends_list
+        if selected_friend in friends_list:
             # Send the message to the server
             try:
                 message = f"REMOVE_FRIEND|{sender}|{selected_friend}"
@@ -595,15 +501,12 @@ def remove_friend():
                 messagebox.showerror("Error", f"Failed to notify the server: {e}")
                 return
 
-            # Remove the selected friend from the local file
-            del friends_data[selected_friend]
+            # Remove the selected friend from friends_list
+            #friends_list.remove(selected_friend)
 
-            # Save the updated data back to the file
-            with open(friendfile, "w") as file:
-                json.dump(friends_data, file, indent=4)
+            # Update the friends list UI
+            #update_friends_list(friends_list_widget, ",".join(friends_list))
 
-            update_friends_list(friends_list_widget)
-            
             messagebox.showinfo("Success", f"{selected_friend} has been removed from your friends list.")
         else:
             messagebox.showerror("Error", f"{selected_friend} is not in your friends list.")
@@ -611,35 +514,38 @@ def remove_friend():
     except Exception as e:
         messagebox.showerror("Error", f"An error occurred: {e}")
 
-def update_friends_list(friends_list_widget):
+def update_friends_list(friends_list_widget, received_friends):
     """
-    Updates the friends list UI widget by reading the FRIENDS_FILE.
+    Updates the friends list UI widget with the received friends list and stores it in the global friends_list.
+    
+    :param friends_list_widget: The Tkinter widget displaying the friends list.
+    :param received_friends: Comma-separated string or a list of friends received from the server.
     """
-    try:
-        # Load friends from the JSON file
-        with open(friendfile, "r") as f:
-            friends_data = json.load(f)
-    except FileNotFoundError:
-        friends_data = {}  # No friends file exists yet
-    except json.JSONDecodeError:
-        friends_data = {}  # Corrupted file, treat as empty
+    global friends_list  # Reference the global variable
 
+    # Ensure received_friends is a list
+    if isinstance(received_friends, str):
+        # Clear the existing friends list
+        friends_list.clear()
+        friends_list.extend(received_friends.split(","))  # Convert from string
+    elif isinstance(received_friends, list):
+        friends_list = received_friends  # Use list directly
+    else:
+        raise TypeError("received_friends must be a string or a list")
+    
     # Clear the existing list in the widget
     friends_list_widget.delete(0, tk.END)
 
-    # Add friends to the widget
-    for friend, details in friends_data.items():
-        ip = details.get("ip", "Unknown IP")
-        port = details.get("port", "Unknown Port")
-        friends_list_widget.insert(tk.END, f"{friend}")
-        # friends_list_widget.insert(tk.END, f"{friend} (IP: {ip}, Port: {port})")
+    # Populate the widget with updated friends list
+    for friend in friends_list:
+        friends_list_widget.insert(tk.END, friend)
 
 def start_server():
     """Starts the server in a separate thread."""
     global stop_file_server
     stop_file_server = False
     #host, port = get_host_and_port()
-    host, port = DEFAULT_HOST, DEFAULT_PORT
+    host, port = default_host, DEFAULT_PORT
     if host and port:
         threading.Thread(target=server, args=(host, port), daemon=True).start()
         server_log_callback(f"Server started on {host}:{port}. Files will be saved to {download_dir}.")
@@ -754,7 +660,8 @@ def show_login():
 
     def attempt_login():
         nonlocal login_success
-        global username
+        global username, friends_list, friend_requests
+
         user = username_entry.get()
         password = password_entry.get()
 
@@ -763,24 +670,35 @@ def show_login():
             return
 
         try:
-           
             # Send login request
             send_message(f"LOGIN|{user}|{password}")
 
             # Receive response
             response = receive_message()
-            if response == f"LOGIN_SUCCESS|{user}":
-                login_success = True
-                username = user
-                messagebox.showinfo("Login Successful", "Welcome!")
-                login_window.destroy()
+
+            # Expected response format: "LOGIN_SUCCESS|username|friend1,friend2|request1,request2"
+            if response.startswith(f"LOGIN_SUCCESS|{user}|"):
+                try:
+                    _, username, friends_data, requests_data = response.split("|", 3)
+    
+                    # Parse friends list (if empty, set to an empty list)
+                    friends_list = friends_data.split(",") if friends_data else []
+
+                    # Parse friend requests (if empty, set to an empty list)
+                    friend_requests = requests_data.split(",") if requests_data else []
+
+                    login_success = True
+                    messagebox.showinfo("Login Successful", "Welcome!")
+                    login_window.destroy()
+                except ValueError:
+                    messagebox.showerror("Error", "Invalid login response format.")
             elif response == f"LOGIN_FAIL|{user}":
                 messagebox.showerror("Login Failed", "Invalid username or password.")
             else:
                 messagebox.showerror("Error", "An error occurred during login.")
         except Exception as e:
             messagebox.showerror("Error", f"Connection failed: {e}")
-    
+
     def attempt_register():
         user = username_entry.get()
         password = password_entry.get()
@@ -789,21 +707,19 @@ def show_login():
             messagebox.showwarning("Input Error", "Please enter both username and password.")
             return
 
-        ip = socket.gethostbyname(socket.gethostname())  # Replace with actual client IP or retrieve dynamically
+        #ip = socket.gethostbyname(socket.gethostname())  # Replace with actual client IP or retrieve dynamically
         port = DEFAULT_PORT  # Replace with actual client port
 
         try:
-            register_message = f"REGISTER|{user}|{password}|{ip}|{port}"
+            register_message = f"REGISTER|{user}|{password}|{default_host}|{port}"
             send_message(register_message)
 
             # Receive response
             response = receive_message()
             if response == f"REGISTER_SUCCESS|{user}":
                 messagebox.showinfo("Registration Successful", "You can now log in.")
-            elif response == f"REGISTER_FAIL|{user}|User '{user}' already exists.":
-                messagebox.showerror("Registration Failed", f"User {user} already exists")
             elif response.startswith(f"REGISTER_FAIL|{user}"):
-                messagebox.showerror("Registration Failed")
+                messagebox.showerror("Registration Failed", "User already exists or another issue occurred.")
             else:
                 messagebox.showerror("Error", f"An error occurred during registration. {response}")
         except Exception as e:
@@ -861,7 +777,7 @@ def get_active_users():
         
         # Parse the JSON response
         active_users = json.loads(response)
-        client_log_callback(f"Active Users: {active_users}")
+        server_log_callback(f"Active Users: {active_users}")
         return active_users
     except json.JSONDecodeError:
         raise ValueError("Failed to parse the server's response. Invalid JSON format.")
@@ -891,9 +807,16 @@ def select_friend():
 def main():
     global server_log_widget, client_log_widget, friends_list_widget, host_entry, port_entry, selected_friend, selected_friend_label
     #initialize_client_ssl_context()
-    if not connect_persistent(USER_DATA_SERVER_HOST, USER_DATA_SERVER_PORT):
-        messagebox.showerror("Error","Failed to Connect to User Server")
+
+    try:
+        if not connect_persistent(USER_DATA_SERVER_HOST, USER_DATA_SERVER_PORT):
+            raise ConnectionError(f"Failed to connect to server at {USER_DATA_SERVER_HOST}:{USER_DATA_SERVER_PORT}")
+    
+    except Exception as e:
+        error_message = f"An error occurred: {str(e)}\n{traceback.format_exc()}"
+        messagebox.showerror("Error", error_message)  # Show a detailed error message
         sys.exit(1)
+            
     if not show_login():
         return  # Exit if login fails or the window is closed without logging in.
     
@@ -933,12 +856,14 @@ def main():
     selected_friend_label = tk.Label(root, text="Selected Friend: None", fg="blue")
     selected_friend_label.grid(row=10, column=0, padx=10, pady=5, sticky="w")
 
-    update_friends_list(friends_list_widget)
+    # Update UI with friends
+    root.after(100, process_friend_requests)
+    update_friends_list(friends_list_widget, friends_list)
 
     # Host and Port Configuration
     tk.Label(root, text="Host:").grid(row=6, column=0, padx=10, pady=5, sticky="e")
     host_entry = tk.Entry(root)
-    host_entry.insert(0, DEFAULT_HOST)
+    host_entry.insert(0, default_host)
     host_entry.grid(row=6, column=1, padx=10, pady=5, sticky="w")
 
     tk.Label(root, text="Port:").grid(row=7, column=0, padx=10, pady=5, sticky="e")
