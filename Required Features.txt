@@ -1,6 +1,7 @@
 Required Updates or Fixes: 
 -Client Cert Errors when running with keys not meant for localhost (create keys that Python TLS will accept)
--Fix the IP and Port Autoselection 
+-Fix the IP and Port Autoselection
+-Fix User Server so connection error doesn't stop server from listening
 -Modify Register User function to Avoid Sending IP (Grab from User Server Side via established connection)
 -Avoid Sending Plaintext Password over TLS connection (Either encrypt with AES(or similar) or hash before sending)
 -Rate Limit for Login Attempts, Friend Requests, RTS messages etc.

@@ -12,20 +12,15 @@ import time
 import json
 import sys
 import requests
-import traceback
 
 # Constants
 DEFAULT_PORT = 65432 # Default Port for File Transfer
 USER_DATA_SERVER_HOST = '127.0.0.1' # Host for the user data server
-#USER_DATA_SERVER_HOST = '192.168.56.1'
 USER_DATA_SERVER_PORT = 5000         # Port for the user data server
 BUFFER_SIZE = 4096
-CLIENT_CERTFILE = "client.crt" # Client Cert Signed with CA Key and Cert
-CLIENT_KEYFILE = "client.key" # Client Key
 SERVER_CERTFILE = "server.crt" # Server Cert Signed with CA Key and Cert
 SERVER_KEYFILE = "server.key" # Server Key
 CA_CRT = "ca.crt" # Certificate Authority Cert
-friendfile = "friends.json"
 
 # Shared state
 server_log_widget = None
@@ -70,9 +65,9 @@ def initialize_server_ssl_context():
 def initialize_client_ssl_context():
     """Initializes the Client SSL context."""
     global client_ssl_context
-    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ssl_context = ssl.create_default_context()
     ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
-    ssl_context.load_cert_chain(certfile=CLIENT_CERTFILE, keyfile=CLIENT_KEYFILE)
+    ssl_context.check_hostname = False
     ssl_context.load_verify_locations(CA_CRT)
     client_ssl_context = ssl_context 
     return ssl_context
@@ -80,9 +75,9 @@ def initialize_client_ssl_context():
 def initialize_file_client_ssl_context():
     """Initializes the Client SSL context."""
     global file_client_ssl_context
-    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ssl_context = ssl.create_default_context()
     ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
-    ssl_context.load_cert_chain(certfile=CLIENT_CERTFILE, keyfile=CLIENT_KEYFILE)
+    ssl_context.check_hostname = False
     ssl_context.load_verify_locations(CA_CRT)
     file_client_ssl_context = ssl_context 
     return ssl_context
@@ -545,10 +540,10 @@ def start_server():
     global stop_file_server
     stop_file_server = False
     #host, port = get_host_and_port()
-    host, port = default_host, DEFAULT_PORT
+    host, port = '0.0.0.0', DEFAULT_PORT
     if host and port:
         threading.Thread(target=server, args=(host, port), daemon=True).start()
-        server_log_callback(f"Server started on {host}:{port}. Files will be saved to {download_dir}.")
+        server_log_callback(f"Server listening on {host}:{port}. Files will be saved to {download_dir}.")
 
 def stop_server():
     """Stops the server gracefully."""
@@ -808,13 +803,8 @@ def main():
     global server_log_widget, client_log_widget, friends_list_widget, host_entry, port_entry, selected_friend, selected_friend_label
     #initialize_client_ssl_context()
 
-    try:
-        if not connect_persistent(USER_DATA_SERVER_HOST, USER_DATA_SERVER_PORT):
-            raise ConnectionError(f"Failed to connect to server at {USER_DATA_SERVER_HOST}:{USER_DATA_SERVER_PORT}")
-    
-    except Exception as e:
-        error_message = f"An error occurred: {str(e)}\n{traceback.format_exc()}"
-        messagebox.showerror("Error", error_message)  # Show a detailed error message
+    if not connect_persistent(USER_DATA_SERVER_HOST, USER_DATA_SERVER_PORT):
+        messagebox.showerror("Error","Failed to Connect to User Server")
         sys.exit(1)
             
     if not show_login():

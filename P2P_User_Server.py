@@ -5,6 +5,7 @@ import ssl
 import tkinter as tk
 from threading import Lock
 import bcrypt
+import requests
 
 # Constants
 PORT = 5000
@@ -21,6 +22,15 @@ active_users = {}
 active_users_lock = Lock()
 user_database = None
 
+def get_ip():
+    try:
+        response = requests.get("http://api.ipify.org", timeout=5)
+        response.raise_for_status()
+        #print(response.text.strip())
+        return response.text.strip()
+    except requests.RequestException as e:
+        return f"Unable to fetch public ip: {e}"
+    
 def get_machine_ip():
     """Returns the IP address of the machine."""
     try:
@@ -33,7 +43,6 @@ def get_machine_ip():
         return None
 
 host = '0.0.0.0'
-#host = '127.0.0.1'
 
 def log_message(widget, message):
     """Logs a message to a specific Text widget."""
@@ -546,7 +555,7 @@ def start_server_thread():
             server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             server_socket.bind((host, PORT))
             server_socket.listen(5)
-            server_log_callback(f"Server started on {host}:{PORT}")
+            server_log_callback(f"Server listening on {host}:{PORT}")
 
             while server_running:
                 try:
@@ -586,6 +595,8 @@ def stop_server():
 
 def start_server_button_callback():
     """Callback for the Start Server button."""
+    server_log_callback(f"Local IP is {get_machine_ip()}")
+    server_log_callback(f"Server IP is {get_ip()}")
     start_button.config(state="disabled")
     stop_button.config(state="normal")
     start_server_thread()
