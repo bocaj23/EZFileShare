@@ -1,12 +1,16 @@
 Required Updates or Fixes: 
 -Client Cert Errors when running with keys not meant for localhost (create keys that Python TLS will accept)
 -Fix the IP and Port Autoselection 
--Fix Reliabilty of file transfers (some files cut off too early)
--Set Time out for requests so users don't sit forever after sending a request if another user isn't available but is logged in
--Store friends list of each user on server so that it can be updated if they log in from a different computer
--Make sure that blank data.json and friends list files are generated on startup if no file exists in the directory
--Make friends list based on username so that multiple users can login from one application installation
--Add friends list update to periodic update so that friends will get removed from the recipients list even if they aren't online when the sender unfriends them
+-Modify Register User function to Avoid Sending IP (Grab from User Server Side via established connection)
+-Avoid Sending Plaintext Password over TLS connection (Either encrypt with AES(or similar) or hash before sending)
+-Rate Limit for Login Attempts, Friend Requests, RTS messages etc.
+-Ability to cancel sent Friend or RTS requests
+-Record to Log File, Import Log File
+-Handle friend requests one by one on server side (check each friend request against recipient friend request list then remove one by one as requests are accepted or declined)
+-Delete User Feature
+-Fix Reliability of file transfers (some files cut off too early)
+-Make sure that a blank data.json is generated on startup if no file exists in the directory (Pretty Sure this works correctly)
 -Set up autogeneration for keys and certs on application startup (could use LetsEncrypt as a CA)
--Encrypt .json files so that users can't manually edit them
+-Encrypt data.json file so that it can't be manually edited
+-Add AES(or similar) encryption on top of TLS for all communications or transfers
 -Add Progress indicator for file transfers (Low Priority) 

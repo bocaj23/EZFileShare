@@ -2,7 +2,6 @@ Dependencies:
 bcrypt
 
 Client (App) Requirements:
-friends.json
 server.key
 server.crt
 client.key
