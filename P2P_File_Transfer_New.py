@@ -388,6 +388,9 @@ class P2PApp:
         self.port_entry.insert(0, str(DEFAULT_PORT))
         self.port_entry.grid(row=6, column=1, padx=10, pady=5, sticky="w")
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
+=======
 >>>>>>> Stashed changes
 =======
 >>>>>>> Stashed changes
@@ -404,6 +407,7 @@ class P2PApp:
         if self.user_state.logged_in == True:
             ctk.CTkButton(self.file_sharing_tab, text="Start", command=self.start_server).grid(row=2, column=0, padx=10, pady=5)
             ctk.CTkButton(self.file_sharing_tab, text="Select Download Directory", command=self.select_download_dir).grid(row=3, column=0, padx=10, pady=5)
+<<<<<<< Updated upstream
 <<<<<<< Updated upstream
 
 <<<<<<< Updated upstream
@@ -424,6 +428,69 @@ class P2PApp:
         self.logout_button.grid(row=4, column=3, padx=10, pady=5, sticky="w")
 =======
 =======
+=======
+
+            # Show friends list when logged in
+            friends_frame = ctk.CTkFrame(self.file_sharing_tab, fg_color="gray10")
+            friends_frame.grid(row=8, column=0, columnspan=4, padx=10, pady=5, sticky="nsew")
+            
+            # Create header label
+            header = ctk.CTkLabel(friends_frame, text="Friends List", font=("Arial", 16, "bold"))
+            header.pack(padx=10, pady=(10,5))
+
+            # Add search bar
+            search_frame = ctk.CTkFrame(friends_frame)
+            search_frame.pack(fill="x", padx=10, pady=5)
+            
+            search_entry = ctk.CTkEntry(search_frame, placeholder_text="Search friends...", width=200)
+            search_entry.pack(side="left", padx=5, pady=5)
+
+            add_friend_button = ctk.CTkButton(search_frame, text="Add Friend")
+            add_friend_button.pack(side="right", padx=5, pady=5)
+            
+            add_friend_entry = ctk.CTkEntry(search_frame, placeholder_text="Enter friend's username...", width=200)
+            add_friend_entry.pack(side="right", padx=5, pady=5)
+
+            # Add example friends
+            friends = [
+                "Alice123",
+                "BobSmith",
+                "Charlie99", 
+                "Diana2024",
+                "EvanP"
+            ]
+
+            # Create a frame to hold friend entries
+            friends_list_frame = ctk.CTkFrame(friends_frame)
+            friends_list_frame.pack(fill="x", padx=10, pady=2)
+
+            def update_friends_list(*args):
+                # Clear existing friends
+                for widget in friends_list_frame.winfo_children():
+                    widget.destroy()
+                
+                search_text = search_entry.get().lower()
+                # Show only matching friends
+                for friend in friends:
+                    if search_text in friend.lower():
+                        friend_frame = ctk.CTkFrame(friends_list_frame)
+                        friend_frame.pack(fill="x", padx=10, pady=2)
+                        
+                        friend_label = ctk.CTkLabel(friend_frame, text=friend)
+                        friend_label.pack(side="left", padx=10, pady=5)
+                        
+                        select_button = ctk.CTkButton(friend_frame, text="Select", command=lambda f=friend: self.select_friend(f))
+                        select_button.pack(side="right", padx=10, pady=5)
+                        
+                        status_label = ctk.CTkLabel(friend_frame, text="Online", text_color="green")
+                        status_label.pack(side="right", padx=10, pady=5)
+
+            # Bind search entry to update function
+            search_entry.bind('<KeyRelease>', update_friends_list)
+            
+            # Initial population of friends list
+            update_friends_list()
+>>>>>>> Stashed changes
 
 >>>>>>> Stashed changes
             # Show friends list when logged in
