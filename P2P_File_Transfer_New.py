@@ -349,7 +349,45 @@ class P2PApp:
         self.file_sharing_tab = self.tabview.add("File Sharing")
         self.settings_tab = self.tabview.add("Settings")
 
+<<<<<<< Updated upstream
         self.draw_file_sharing_tab()
+=======
+        self.draw_login_tab()
+
+    def draw_login_tab(self):
+        for widget in self.login_tab.winfo_children():
+            widget.destroy()
+
+        # Username Section
+        ctk.CTkLabel(self.login_tab, text="Username:").grid(row=4, column=0, padx=10, pady=5, sticky="e")
+        self.username_entry = ctk.CTkEntry(self.login_tab)
+        self.username_entry.grid(row=4, column=1, padx=10, pady=5, sticky="w")
+
+        # Login Section
+        self.login_button = ctk.CTkButton(self.login_tab, text="Login", command=self.login)
+        self.login_button.grid(row=4, column=2, padx=10, pady=5, sticky="w")
+        
+        # Logout Section
+        self.logout_button = ctk.CTkButton(self.login_tab, text="Logout", command=self.logout)
+        self.logout_button.grid(row=6, column=2, padx=10, pady=5, sticky="w")
+
+        # Password Section
+        ctk.CTkLabel(self.login_tab, text="Password:").grid(row=5, column=0, padx=10, pady=5, sticky="e")
+        self.password_entry = ctk.CTkEntry(self.login_tab, show="*")  # Mask password input
+        self.password_entry.grid(row=5, column=1, padx=10, pady=5, sticky="w")
+
+        # Register Section
+        if self.user_state.logged_in == False:
+            self.register_button = ctk.CTkButton(self.login_tab, text="Register", command=self.register)
+            self.register_button.grid(row=5, column=2, padx=10, pady=5, sticky="w")
+
+        # Port Configuration
+        ctk.CTkLabel(self.login_tab, text="Port:").grid(row=6, column=0, padx=10, pady=5, sticky="e")
+        self.port_entry = ctk.CTkEntry(self.login_tab)
+        
+        self.port_entry.insert(0, str(DEFAULT_PORT))
+        self.port_entry.grid(row=6, column=1, padx=10, pady=5, sticky="w")
+>>>>>>> Stashed changes
 
     def draw_file_sharing_tab(self):
         for widget in self.file_sharing_tab.winfo_children():
@@ -359,10 +397,12 @@ class P2PApp:
         ctk.CTkLabel(self.file_sharing_tab, text="Receive").grid(row=0, column=0, padx=10, pady=5, sticky="w")
         self.server_log = ctk.CTkTextbox(self.file_sharing_tab, height=200, width=400)
         self.server_log.grid(row=1, column=0, padx=10, pady=5)
+        
         if self.user_state.logged_in == True:
             ctk.CTkButton(self.file_sharing_tab, text="Start", command=self.start_server).grid(row=2, column=0, padx=10, pady=5)
-        ctk.CTkButton(self.file_sharing_tab, text="Select Download Directory", command=self.select_download_dir).grid(row=3, column=0, padx=10, pady=5)
+            ctk.CTkButton(self.file_sharing_tab, text="Select Download Directory", command=self.select_download_dir).grid(row=3, column=0, padx=10, pady=5)
 
+<<<<<<< Updated upstream
         #Friends Section
         ctk.CTkLabel(self.file_sharing_tab, text="Friends").grid(row=4, column=0, padx=10, pady=5, sticky="w")
 
@@ -378,6 +418,68 @@ class P2PApp:
         # Logout Section
         self.logout_button = ctk.CTkButton(self.file_sharing_tab, text="Logout", command=self.logout)
         self.logout_button.grid(row=4, column=3, padx=10, pady=5, sticky="w")
+=======
+            # Show friends list when logged in
+            friends_frame = ctk.CTkFrame(self.file_sharing_tab, fg_color="gray10")
+            friends_frame.grid(row=8, column=0, columnspan=4, padx=10, pady=5, sticky="nsew")
+            
+            # Create header label
+            header = ctk.CTkLabel(friends_frame, text="Friends List", font=("Arial", 16, "bold"))
+            header.pack(padx=10, pady=(10,5))
+
+            # Add search bar
+            search_frame = ctk.CTkFrame(friends_frame)
+            search_frame.pack(fill="x", padx=10, pady=5)
+            
+            search_entry = ctk.CTkEntry(search_frame, placeholder_text="Search friends...", width=200)
+            search_entry.pack(side="left", padx=5, pady=5)
+
+            add_friend_button = ctk.CTkButton(search_frame, text="Add Friend")
+            add_friend_button.pack(side="right", padx=5, pady=5)
+            
+            add_friend_entry = ctk.CTkEntry(search_frame, placeholder_text="Enter friend's username...", width=200)
+            add_friend_entry.pack(side="right", padx=5, pady=5)
+
+            # Add example friends
+            friends = [
+                "Alice123",
+                "BobSmith",
+                "Charlie99", 
+                "Diana2024",
+                "EvanP"
+            ]
+
+            # Create a frame to hold friend entries
+            friends_list_frame = ctk.CTkFrame(friends_frame)
+            friends_list_frame.pack(fill="x", padx=10, pady=2)
+
+            def update_friends_list(*args):
+                # Clear existing friends
+                for widget in friends_list_frame.winfo_children():
+                    widget.destroy()
+                
+                search_text = search_entry.get().lower()
+                # Show only matching friends
+                for friend in friends:
+                    if search_text in friend.lower():
+                        friend_frame = ctk.CTkFrame(friends_list_frame)
+                        friend_frame.pack(fill="x", padx=10, pady=2)
+                        
+                        friend_label = ctk.CTkLabel(friend_frame, text=friend)
+                        friend_label.pack(side="left", padx=10, pady=5)
+                        
+                        select_button = ctk.CTkButton(friend_frame, text="Select", command=lambda f=friend: self.select_friend(f))
+                        select_button.pack(side="right", padx=10, pady=5)
+                        
+                        status_label = ctk.CTkLabel(friend_frame, text="Online", text_color="green")
+                        status_label.pack(side="right", padx=10, pady=5)
+
+            # Bind search entry to update function
+            search_entry.bind('<KeyRelease>', update_friends_list)
+            
+            # Initial population of friends list
+            update_friends_list()
+>>>>>>> Stashed changes
 
         # Password Section
         ctk.CTkLabel(self.file_sharing_tab, text="Password:").grid(row=5, column=0, padx=10, pady=5, sticky="e")
