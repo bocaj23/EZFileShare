@@ -35,12 +35,10 @@ def send_to_server(endpoint, username, password, identifier, ip, port):
     server_port = 6223
     
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    auth_cert_file = os.path.join(script_dir, "authcert.pem")
     
     payload = f"{endpoint.upper()} {username} {password} {identifier} {ip} {port}\n"
 
-    context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-    context.load_verify_locations(auth_cert_file)
+    context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH, cafile=AUTHCERTFILE)
 
     #client only sends one message and server sends one message back
     try:
@@ -352,10 +350,38 @@ class P2PApp:
         self.tabview = ctk.CTkTabview(self.root)
         self.tabview.pack(fill="both", expand=True)
 
-        self.file_sharing_tab = self.tabview.add("File Sharing")
-        self.settings_tab = self.tabview.add("Settings")
+        self.login_tab = self.tabview.add("Login")
 
-        self.draw_file_sharing_tab()
+        self.draw_login_tab()
+
+    def draw_login_tab(self):
+        for widget in self.login_tab.winfo_children():
+            widget.destroy()
+
+        # Username Section
+        ctk.CTkLabel(self.login_tab, text="Username:").grid(row=4, column=0, padx=10, pady=5, sticky="e")
+        self.username_entry = ctk.CTkEntry(self.login_tab)
+        self.username_entry.grid(row=4, column=1, padx=10, pady=5, sticky="w")
+
+        # Login Section
+        self.login_button = ctk.CTkButton(self.login_tab, text="Login", command=self.login)
+        self.login_button.grid(row=4, column=2, padx=10, pady=5, sticky="w")
+
+        # Password Section
+        ctk.CTkLabel(self.login_tab, text="Password:").grid(row=5, column=0, padx=10, pady=5, sticky="e")
+        self.password_entry = ctk.CTkEntry(self.login_tab, show="*")  # Mask password input
+        self.password_entry.grid(row=5, column=1, padx=10, pady=5, sticky="w")
+
+        # Register Section
+        if self.user_state.logged_in == False:
+            self.register_button = ctk.CTkButton(self.login_tab, text="Register", command=self.register)
+            self.register_button.grid(row=5, column=2, padx=10, pady=5, sticky="w")
+
+        # Port Configuration
+        ctk.CTkLabel(self.login_tab, text="Port:").grid(row=7, column=0, padx=10, pady=5, sticky="e")
+        self.port_entry = ctk.CTkEntry(self.login_tab)
+        self.port_entry.insert(0, str(DEFAULT_PORT))
+        self.port_entry.grid(row=7, column=1, padx=10, pady=5, sticky="w")
 
     def draw_file_sharing_tab(self):
         for widget in self.file_sharing_tab.winfo_children():
@@ -369,31 +395,12 @@ class P2PApp:
             ctk.CTkButton(self.file_sharing_tab, text="Start", command=self.start_server).grid(row=2, column=0, padx=10, pady=5)
         ctk.CTkButton(self.file_sharing_tab, text="Select Download Directory", command=self.select_download_dir).grid(row=3, column=0, padx=10, pady=5)
 
-        #Friends Section
-        ctk.CTkLabel(self.file_sharing_tab, text="Friends").grid(row=4, column=0, padx=10, pady=5, sticky="w")
-
-        # Username Section
-        ctk.CTkLabel(self.file_sharing_tab, text="Username:").grid(row=4, column=0, padx=10, pady=5, sticky="e")
-        self.username_entry = ctk.CTkEntry(self.file_sharing_tab)
-        self.username_entry.grid(row=4, column=1, padx=10, pady=5, sticky="w")
-
-        # Login Section
-        self.login_button = ctk.CTkButton(self.file_sharing_tab, text="Login", command=self.login)
-        self.login_button.grid(row=4, column=2, padx=10, pady=5, sticky="w")
-
         # Logout Section
         self.logout_button = ctk.CTkButton(self.file_sharing_tab, text="Logout", command=self.logout)
         self.logout_button.grid(row=4, column=3, padx=10, pady=5, sticky="w")
 
-        # Password Section
-        ctk.CTkLabel(self.file_sharing_tab, text="Password:").grid(row=5, column=0, padx=10, pady=5, sticky="e")
-        self.password_entry = ctk.CTkEntry(self.file_sharing_tab, show="*")  # Mask password input
-        self.password_entry.grid(row=5, column=1, padx=10, pady=5, sticky="w")
-
-        # Register Section
-        if self.user_state.logged_in == False:
-            self.register_button = ctk.CTkButton(self.file_sharing_tab, text="Register", command=self.register)
-            self.register_button.grid(row=5, column=2, padx=10, pady=5, sticky="w")
+        #Friends Section
+        ctk.CTkLabel(self.file_sharing_tab, text="Friends").grid(row=4, column=0, padx=10, pady=5, sticky="w")
 
         # Client Section
         ctk.CTkLabel(self.file_sharing_tab, text="Send").grid(row=0, column=2, padx=10, pady=5, sticky="w")
@@ -404,12 +411,6 @@ class P2PApp:
             ctk.CTkLabel(self.file_sharing_tab, text="To:").grid(row=2, column=1, padx=10, pady=5, sticky="e")
             self.to_entry = ctk.CTkEntry(self.file_sharing_tab)
             self.to_entry.grid(row=2, column=2, padx=10, pady=5, sticky="w")
-
-        # Port Configuration
-        ctk.CTkLabel(self.file_sharing_tab, text="Port:").grid(row=7, column=0, padx=10, pady=5, sticky="e")
-        self.port_entry = ctk.CTkEntry(self.file_sharing_tab)
-        self.port_entry.insert(0, str(DEFAULT_PORT))
-        self.port_entry.grid(row=7, column=1, padx=10, pady=5, sticky="w")
 
         # Default download directory
         self.download_dir = os.getcwd()
@@ -511,6 +512,9 @@ class P2PApp:
                 self.user_state.username = username
                 self.user_state.port = port
                 self.user_state.logged_in = True
+                self.file_sharing_tab = self.tabview.add("File Sharing")
+                self.settings_tab = self.tabview.add("Settings")
+                self.tabview.set("File Sharing")
                 self.draw_file_sharing_tab()
 
         except FileNotFoundError as e:
