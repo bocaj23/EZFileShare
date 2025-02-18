@@ -323,18 +323,18 @@ def setup_port_forwarding(default_gateway, port, description="P2P Program"):
     except Exception as e:
         return f"Failed to forward port {port}: {e}"
 
-class P2PApp:
-    @dataclass
-    class login_state:
-        username: str
-        ip: str
-        port: int
-        logged_in: bool
+@dataclass
+class login_state:
+    username: str = ""
+    ip: str = ""
+    port: int = DEFAULT_PORT
+    logged_in: bool = False
 
+class P2PApp:
     def __init__(self, root):
         self.root = root
         self.root.title("EZFileShare")
-        self.login_state.logged_in = 0
+        self.user_state = login_state()
 
         # Set appearance mode and color theme
         ctk.set_appearance_mode("dark")
@@ -343,60 +343,73 @@ class P2PApp:
         # Command queue for server
         self.command_queue = queue.Queue()
 
+        self.tabview = ctk.CTkTabview(self.root)
+        self.tabview.pack(fill="both", expand=True)
+
+        self.file_sharing_tab = self.tabview.add("File Sharing")
+        self.settings_tab = self.tabview.add("Settings")
+
+        self.draw_file_sharing_tab()
+
+    def draw_file_sharing_tab(self):
+        for widget in self.file_sharing_tab.winfo_children():
+            widget.destroy()
+
         # Server Section
-        ctk.CTkLabel(root, text="Receive").grid(row=0, column=0, padx=10, pady=5, sticky="w")
-        self.server_log = ctk.CTkTextbox(root, height=200, width=400)
+        ctk.CTkLabel(self.file_sharing_tab, text="Receive").grid(row=0, column=0, padx=10, pady=5, sticky="w")
+        self.server_log = ctk.CTkTextbox(self.file_sharing_tab, height=200, width=400)
         self.server_log.grid(row=1, column=0, padx=10, pady=5)
-        ctk.CTkButton(root, text="Start", command=self.start_server).grid(row=2, column=0, padx=10, pady=5)
-        ctk.CTkButton(root, text="Select Download Directory", command=self.select_download_dir).grid(row=3, column=0, padx=10, pady=5)
+        if self.user_state.logged_in == True:
+            ctk.CTkButton(self.file_sharing_tab, text="Start", command=self.start_server).grid(row=2, column=0, padx=10, pady=5)
+        ctk.CTkButton(self.file_sharing_tab, text="Select Download Directory", command=self.select_download_dir).grid(row=3, column=0, padx=10, pady=5)
 
         #Friends Section
-        ctk.CTkLabel(root, text="Friends").grid(row=4, column=0, padx=10, pady=5, sticky="w")
+        ctk.CTkLabel(self.file_sharing_tab, text="Friends").grid(row=4, column=0, padx=10, pady=5, sticky="w")
 
         # Username Section
-        ctk.CTkLabel(root, text="Username:").grid(row=4, column=0, padx=10, pady=5, sticky="e")
-        self.username_entry = ctk.CTkEntry(root)
+        ctk.CTkLabel(self.file_sharing_tab, text="Username:").grid(row=4, column=0, padx=10, pady=5, sticky="e")
+        self.username_entry = ctk.CTkEntry(self.file_sharing_tab)
         self.username_entry.grid(row=4, column=1, padx=10, pady=5, sticky="w")
 
         # Login Section
-        self.login_button = ctk.CTkButton(root, text="Login", command=self.login)
+        self.login_button = ctk.CTkButton(self.file_sharing_tab, text="Login", command=self.login)
         self.login_button.grid(row=4, column=2, padx=10, pady=5, sticky="w")
 
         # Logout Section
-        self.logout_button = ctk.CTkButton(root, text="Logout", command=self.logout)
+        self.logout_button = ctk.CTkButton(self.file_sharing_tab, text="Logout", command=self.logout)
         self.logout_button.grid(row=4, column=3, padx=10, pady=5, sticky="w")
 
         # Password Section
-        ctk.CTkLabel(root, text="Password:").grid(row=5, column=0, padx=10, pady=5, sticky="e")
-        self.password_entry = ctk.CTkEntry(root, show="*")  # Mask password input
+        ctk.CTkLabel(self.file_sharing_tab, text="Password:").grid(row=5, column=0, padx=10, pady=5, sticky="e")
+        self.password_entry = ctk.CTkEntry(self.file_sharing_tab, show="*")  # Mask password input
         self.password_entry.grid(row=5, column=1, padx=10, pady=5, sticky="w")
 
         # Register Section
-        self.register_button = ctk.CTkButton(root, text="Register", command=self.register)
-        self.register_button.grid(row=5, column=2, padx=10, pady=5, sticky="w")
+        if self.user_state.logged_in == False:
+            self.register_button = ctk.CTkButton(self.file_sharing_tab, text="Register", command=self.register)
+            self.register_button.grid(row=5, column=2, padx=10, pady=5, sticky="w")
 
         # Client Section
-        ctk.CTkLabel(root, text="Send").grid(row=0, column=2, padx=10, pady=5, sticky="w")
-        self.client_log = ctk.CTkTextbox(root, height=200, width=400)
+        ctk.CTkLabel(self.file_sharing_tab, text="Send").grid(row=0, column=2, padx=10, pady=5, sticky="w")
+        self.client_log = ctk.CTkTextbox(self.file_sharing_tab, height=200, width=400)
         self.client_log.grid(row=1, column=2, padx=10, pady=5)
-        ctk.CTkButton(root, text="Select File & Send", command=self.select_and_send_file).grid(row=2, column=2, padx=10, pady=5)
-        ctk.CTkLabel(root, text="To:").grid(row=2, column=1, padx=10, pady=5, sticky="e")
-        self.to_entry = ctk.CTkEntry(root)
-        self.to_entry.grid(row=2, column=2, padx=10, pady=5, sticky="w")
+        if self.user_state.logged_in == True:
+            ctk.CTkButton(self.file_sharing_tab, text="Select File & Send", command=self.select_and_send_file).grid(row=2, column=2, padx=10, pady=5)
+            ctk.CTkLabel(self.file_sharing_tab, text="To:").grid(row=2, column=1, padx=10, pady=5, sticky="e")
+            self.to_entry = ctk.CTkEntry(self.file_sharing_tab)
+            self.to_entry.grid(row=2, column=2, padx=10, pady=5, sticky="w")
 
-        # Host and Port Configuration
-        ctk.CTkLabel(root, text="Host:").grid(row=6, column=0, padx=10, pady=5, sticky="e")
-        self.host_entry = ctk.CTkEntry(root)
-        self.host_entry.insert(0, get_ip())
-        self.host_entry.grid(row=6, column=1, padx=10, pady=5, sticky="w")
-
-        ctk.CTkLabel(root, text="Port:").grid(row=7, column=0, padx=10, pady=5, sticky="e")
-        self.port_entry = ctk.CTkEntry(root)
+        # Port Configuration
+        ctk.CTkLabel(self.file_sharing_tab, text="Port:").grid(row=7, column=0, padx=10, pady=5, sticky="e")
+        self.port_entry = ctk.CTkEntry(self.file_sharing_tab)
         self.port_entry.insert(0, str(DEFAULT_PORT))
         self.port_entry.grid(row=7, column=1, padx=10, pady=5, sticky="w")
 
         # Default download directory
         self.download_dir = os.getcwd()
+
+    def draw_settings_tab(self):
+        return
 
     def log_message(self, widget, message):
         """Logs a message to a specific Text widget."""
@@ -466,7 +479,7 @@ class P2PApp:
             raise ValueError("Username cannot be longer than 16 characters")
 
         password = self.password_entry.get()
-        ip = self.host_entry.get()
+        ip = get_ip()
         port = self.port_entry.get()
 
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -487,13 +500,12 @@ class P2PApp:
             messagebox.showinfo("Login Response", response)
 
             if "Login successful" in response:
-                self.password_entry.grid_remove() 
                 self.login_button.grid_remove()    
                 self.register_button.grid_remove()
-                self.login_state.username = username
-                self.login_state.ip = ip
-                self.login_state.port = port
-                self.login_state.logged_in = 1
+                self.user_state.username = username
+                self.user_state.port = port
+                self.user_state.logged_in = True
+                self.draw_file_sharing_tab()
 
         except FileNotFoundError as e:
             messagebox.showerror("Error", f"File Error: {e}")
@@ -510,7 +522,7 @@ class P2PApp:
             raise ValueError("Username cannot be longer than 16 characters")
 
         password = self.password_entry.get()
-        ip = self.host_entry.get()
+        ip = get_ip()
         port = self.port_entry.get()
 
         script_dir = os.path.dirname(os.path.abspath(__file__))
