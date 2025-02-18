@@ -330,6 +330,12 @@ class login_state:
     port: int = DEFAULT_PORT
     logged_in: bool = False
 
+    def clear(self):
+        self.username = ""
+        self.ip = ""
+        self.port = 0
+        self.logged_in = False
+
 class P2PApp:
     def __init__(self, root):
         self.root = root
@@ -556,7 +562,8 @@ class P2PApp:
             messagebox.showerror("Error", f"An unexpected error occurred: {e}")
 
     def logout(self):
-        return
+        self.user_state.clear()
+        self.draw_file_sharing_tab()
 
 if __name__ == "__main__":
     root = ctk.CTk()
