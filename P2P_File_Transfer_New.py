@@ -2,7 +2,7 @@ import os
 import socket
 import ssl
 import threading
-import tkinter as tk
+import customtkinter as ctk
 from tkinter import filedialog, messagebox
 import queue
 import zlib
@@ -289,7 +289,6 @@ def setup_port_forwarding(default_gateway, port, description="P2P Program"):
         devices = upnp.discover()
         if not devices:
             return "No UPnP devices found. Ensure UPnP is enabled on your router."
-        print(devices)
 
         # Find the device associated with the default gateway
         gateway_device = None
@@ -335,60 +334,64 @@ class P2PApp:
     def __init__(self, root):
         self.root = root
         self.root.title("EZFileShare")
-        self.login_state.logged_in = 0;
+        self.login_state.logged_in = 0
+
+        # Set appearance mode and color theme
+        ctk.set_appearance_mode("dark")
+        ctk.set_default_color_theme("blue")
 
         # Command queue for server
         self.command_queue = queue.Queue()
 
         # Server Section
-        tk.Label(root, text="Receive").grid(row=0, column=0, padx=10, pady=5, sticky="w")
-        self.server_log = tk.Text(root, height=10, width=50, state="disabled")
+        ctk.CTkLabel(root, text="Receive").grid(row=0, column=0, padx=10, pady=5, sticky="w")
+        self.server_log = ctk.CTkTextbox(root, height=200, width=400)
         self.server_log.grid(row=1, column=0, padx=10, pady=5)
-        tk.Button(root, text="Start", command=self.start_server).grid(row=2, column=0, padx=10, pady=5)
-        tk.Button(root, text="Select Download Directory", command=self.select_download_dir).grid(row=3, column=0, padx=10, pady=5)
+        ctk.CTkButton(root, text="Start", command=self.start_server).grid(row=2, column=0, padx=10, pady=5)
+        ctk.CTkButton(root, text="Select Download Directory", command=self.select_download_dir).grid(row=3, column=0, padx=10, pady=5)
 
         #Friends Section
-        tk.Label(root, text="Friends").grid(row=4, column=0, padx=10, pady=5, sticky="w")
+        ctk.CTkLabel(root, text="Friends").grid(row=4, column=0, padx=10, pady=5, sticky="w")
 
         # Username Section
-        tk.Label(root, text="Username:").grid(row=4, column=0, padx=10, pady=5, sticky="e")
-        self.username_entry = tk.Entry(root)
+        ctk.CTkLabel(root, text="Username:").grid(row=4, column=0, padx=10, pady=5, sticky="e")
+        self.username_entry = ctk.CTkEntry(root)
         self.username_entry.grid(row=4, column=1, padx=10, pady=5, sticky="w")
 
         # Login Section
-        self.login_button = tk.Button(root, text="Login", command=self.login)
+        self.login_button = ctk.CTkButton(root, text="Login", command=self.login)
         self.login_button.grid(row=4, column=2, padx=10, pady=5, sticky="w")
 
         # Logout Section
-        self.logout_button = tk.Button(root, text="Logout", command=self.logout)
+        self.logout_button = ctk.CTkButton(root, text="Logout", command=self.logout)
         self.logout_button.grid(row=4, column=3, padx=10, pady=5, sticky="w")
 
         # Password Section
-        tk.Label(root, text="Password:").grid(row=5, column=0, padx=10, pady=5, sticky="e")
-        self.password_entry = tk.Entry(root, show="*")  # Mask password input
+        ctk.CTkLabel(root, text="Password:").grid(row=5, column=0, padx=10, pady=5, sticky="e")
+        self.password_entry = ctk.CTkEntry(root, show="*")  # Mask password input
         self.password_entry.grid(row=5, column=1, padx=10, pady=5, sticky="w")
 
         # Register Section
-        self.register_button = tk.Button(root, text="Register", command=self.register)
+        self.register_button = ctk.CTkButton(root, text="Register", command=self.register)
         self.register_button.grid(row=5, column=2, padx=10, pady=5, sticky="w")
 
         # Client Section
-        tk.Label(root, text="Send").grid(row=0, column=2, padx=10, pady=5, sticky="w")
-        self.client_log = tk.Text(root, height=10, width=50, state="disabled")
+        ctk.CTkLabel(root, text="Send").grid(row=0, column=2, padx=10, pady=5, sticky="w")
+        self.client_log = ctk.CTkTextbox(root, height=200, width=400)
         self.client_log.grid(row=1, column=2, padx=10, pady=5)
-        tk.Button(root, text="Select File & Send", command=self.select_and_send_file).grid(row=2, column=2, padx=10, pady=5)
-        tk.Label(root, text="To:").grid(row=2, column=1, padx=10, pady=5, sticky="e")
-        self.to_entry = tk.Entry(root)
+        ctk.CTkButton(root, text="Select File & Send", command=self.select_and_send_file).grid(row=2, column=2, padx=10, pady=5)
+        ctk.CTkLabel(root, text="To:").grid(row=2, column=1, padx=10, pady=5, sticky="e")
+        self.to_entry = ctk.CTkEntry(root)
         self.to_entry.grid(row=2, column=2, padx=10, pady=5, sticky="w")
 
         # Host and Port Configuration
-        tk.Label(root, text="Host:").grid(row=6, column=0, padx=10, pady=5, sticky="e")
-        self.host_entry = tk.Entry(root)
+        ctk.CTkLabel(root, text="Host:").grid(row=6, column=0, padx=10, pady=5, sticky="e")
+        self.host_entry = ctk.CTkEntry(root)
         self.host_entry.insert(0, get_ip())
         self.host_entry.grid(row=6, column=1, padx=10, pady=5, sticky="w")
 
-        tk.Label(root, text="Port:").grid(row=7, column=0, padx=10, pady=5, sticky="e")
-        self.port_entry = tk.Entry(root)
+        ctk.CTkLabel(root, text="Port:").grid(row=7, column=0, padx=10, pady=5, sticky="e")
+        self.port_entry = ctk.CTkEntry(root)
         self.port_entry.insert(0, str(DEFAULT_PORT))
         self.port_entry.grid(row=7, column=1, padx=10, pady=5, sticky="w")
 
@@ -397,10 +400,10 @@ class P2PApp:
 
     def log_message(self, widget, message):
         """Logs a message to a specific Text widget."""
-        widget.config(state="normal")
-        widget.insert(tk.END, message + "\n")
-        widget.config(state="disabled")
-        widget.see(tk.END)
+        widget.configure(state="normal")
+        widget.insert("end", message + "\n")
+        widget.configure(state="disabled")
+        widget.see("end")
 
     def server_log_callback(self, message):
         """Callback to log server messages."""
@@ -487,11 +490,10 @@ class P2PApp:
                 self.password_entry.grid_remove() 
                 self.login_button.grid_remove()    
                 self.register_button.grid_remove()
-                self.login_state.username = username;
-                self.login_state.ip = ip;
+                self.login_state.username = username
+                self.login_state.ip = ip
                 self.login_state.port = port
-                self.login_state.logged_in = 1;
-            
+                self.login_state.logged_in = 1
 
         except FileNotFoundError as e:
             messagebox.showerror("Error", f"File Error: {e}")
@@ -499,8 +501,6 @@ class P2PApp:
             messagebox.showerror("Error", f"Value Error: {e}")
         except Exception as e:
             messagebox.showerror("Error", f"An unexpected error occurred: {e}")
-
-
 
     def register(self):
         """Handles the register button click with secure key generation."""
@@ -547,6 +547,6 @@ class P2PApp:
         return
 
 if __name__ == "__main__":
-    root = tk.Tk()
+    root = ctk.CTk()
     app = P2PApp(root)
     root.mainloop()
