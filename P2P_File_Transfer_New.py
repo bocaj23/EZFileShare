@@ -322,11 +322,19 @@ def setup_port_forwarding(default_gateway, port, description="P2P Program"):
         return f"Failed to forward port {port}: {e}"
 
 @dataclass
+class settings_state:
+    max_size: int = 10
+    list_state: int = 0 #0 for include, 1 for exclude
+    list: str = ""
+    max_transfers: int = 1
+
+@dataclass
 class login_state:
     username: str = ""
     ip: str = ""
     port: int = DEFAULT_PORT
     logged_in: bool = False
+    is_using_vpn: bool = False
 
     def clear(self):
         self.username = ""
@@ -339,6 +347,7 @@ class P2PApp:
         self.root = root
         self.root.title("EZFileShare")
         self.user_state = login_state()
+        self.user_settings = settings_state()
 
         # Set appearance mode and color theme
         ctk.set_appearance_mode("dark")
@@ -351,8 +360,87 @@ class P2PApp:
         self.tabview.pack(fill="both", expand=True)
 
         self.login_tab = self.tabview.add("Login")
+        self.file_sharing_tab = self.tabview.add("File Sharing")
+        self.settings_tab = self.tabview.add("Settings")
 
         self.draw_login_tab()
+        self.tabview._segmented_button.configure(command=self.on_tab_change)
+
+    def on_tab_change(self, value=None):
+        if self.user_state.logged_in == False:
+            return
+
+        if value:
+            self.tabview.set(value)
+
+        selected_tab = self.tabview.get()
+
+        print(selected_tab)
+        if selected_tab == "Login":
+            self.draw_login_tab()
+        elif selected_tab == "File Sharing":
+            self.draw_file_sharing_tab()
+        elif selected_tab == "Settings":
+            self.draw_settings_tab()
+
+    def draw_settings_tab(self):
+        """Clears the settings tab and redraws widgets"""
+        # Clear previous widgets
+        for widget in self.settings_tab.winfo_children():
+            widget.destroy()
+
+        # Maximum File Size Setting
+        ctk.CTkLabel(self.settings_tab, text="Maximum Allowed File Size when receiving files:").grid(row=0, column=0, padx=10, pady=5, sticky="w")
+        
+        button_frame2 = ctk.CTkFrame(self.settings_tab)
+        button_frame2.grid(row=0, column=1, columnspan=2, padx=5, pady=5, sticky="w")
+        self.max_size_entry = ctk.CTkEntry(button_frame2)
+        self.max_size_entry.pack(side="left", padx=5)
+        ctk.CTkLabel(button_frame2, text="GB").pack(side="left", padx=5)
+        self.max_size_entry.insert(0, "10")
+
+        # IP Geofiltering Buttons
+        ctk.CTkLabel(self.settings_tab, text="IP Geofiltering:").grid(row=1, column=0, padx=10, pady=5, sticky="w")
+
+        button_frame = ctk.CTkFrame(self.settings_tab)
+        button_frame.grid(row=1, column=1, columnspan=4, padx=5, pady=5, sticky="w")
+        self.include_button = ctk.CTkButton(button_frame, text="Include", width=80)
+        self.include_button.pack(side="left", padx=5)
+        self.exclude_button = ctk.CTkButton(button_frame, text="Exclude", width=80)
+        self.exclude_button.pack(side="left", padx=5)
+        ctk.CTkLabel(button_frame, text="Current Location:").pack(side="left", padx=5)
+        self.current_place_entry = ctk.CTkEntry(button_frame)
+        self.current_place_entry.pack(side="left", padx=5)
+
+        ctk.CTkLabel(self.settings_tab, text="Add place to list:").grid(row=2, column=0, padx=10, pady=5, sticky="w")
+        self.add_location_entry = ctk.CTkEntry(self.settings_tab)
+        self.add_location_entry.grid(row=2, column=1, padx=10, pady=5, sticky="w")
+
+        self.location_list = ctk.CTkTextbox(self.settings_tab, height=200, width=400)
+        self.location_list.grid(row=3, column=1, padx=10, pady=5)
+        self.list_state_entry = ctk.CTkEntry(self.settings_tab, width=415)
+        self.list_state_entry.grid(row=3, column=2, padx=10, pady=5, sticky="w")
+        self.list_state_entry.insert(0, "Currently INCLUDING all list entries as valid places to receive files from")
+        self.list_state_entry.configure(state="readonly")
+
+        # Maximum Transfers Setting
+        ctk.CTkLabel(self.settings_tab, text="Maximum number of incoming transfers at a time:").grid(row=4, column=0, padx=10, pady=5, sticky="w")
+        self.max_transfers_entry = ctk.CTkEntry(self.settings_tab)
+        self.max_transfers_entry.grid(row=4, column=1, padx=10, pady=5, sticky="w")
+        self.max_transfers_entry.insert(0, "1")
+
+        # Blacklisted file extensions
+        ctk.CTkLabel(self.settings_tab, text="Blacklisted file extenstions:").grid(row=5, column=0, padx=10, pady=5, sticky="w")
+        
+        button_frame3 = ctk.CTkFrame(self.settings_tab)
+        button_frame3.grid(row=5, column=1, columnspan=2, padx=5, pady=5, sticky="w")
+        self.blacklisted_extenstions_entry = ctk.CTkEntry(button_frame3)
+        self.blacklisted_extenstions_entry.pack(side="left", padx=5)
+        self.add_extension_button = ctk.CTkButton(button_frame3, text="Add", width=80)
+        self.add_extension_button.pack(side="left", padx=5)
+
+        self.extensions_list = ctk.CTkTextbox(self.settings_tab, height=200, width=400)
+        self.extensions_list.grid(row=6, column=1, padx=10, pady=5)
 
     def draw_login_tab(self):
         for widget in self.login_tab.winfo_children():
@@ -414,9 +502,6 @@ class P2PApp:
 
         # Default download directory
         self.download_dir = os.getcwd()
-
-    def draw_settings_tab(self):
-        return
 
     def log_message(self, widget, message):
         """Logs a message to a specific Text widget."""
@@ -512,8 +597,6 @@ class P2PApp:
                 self.user_state.username = username
                 self.user_state.port = port
                 self.user_state.logged_in = True
-                self.file_sharing_tab = self.tabview.add("File Sharing")
-                self.settings_tab = self.tabview.add("Settings")
                 self.tabview.set("File Sharing")
                 self.draw_file_sharing_tab()
 
