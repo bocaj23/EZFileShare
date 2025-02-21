@@ -9,9 +9,11 @@ import zlib
 import secrets
 import string
 import stat
-from dataclasses import dataclass
+from dataclasses import dataclass 
+from dataclasses import asdict
 import requests
 import upnpy
+import json
 
 
 # Constants
@@ -63,8 +65,6 @@ def send_to_server(endpoint, username, password, identifier, ip, port):
     except Exception as e:
         print(f"Client error: {e}")
         return f"Error: {e}"
-
-
 
 
 def create_tls_context():
@@ -323,10 +323,15 @@ def setup_port_forwarding(default_gateway, port, description="P2P Program"):
 
 @dataclass
 class settings_state:
+    #max file size
     max_size: int = 10
+    #ip geofiltering
     list_state: int = 0 #0 for include, 1 for exclude
-    list: str = ""
+    locations_list = []
+    #max transfers
     max_transfers: int = 1
+    #blacklisted file extensions
+    file_extension_blacklist = []
 
 @dataclass
 class login_state:
@@ -391,56 +396,223 @@ class P2PApp:
 
         # Maximum File Size Setting
         ctk.CTkLabel(self.settings_tab, text="Maximum Allowed File Size when receiving files:").grid(row=0, column=0, padx=10, pady=5, sticky="w")
-        
+    
         button_frame2 = ctk.CTkFrame(self.settings_tab)
         button_frame2.grid(row=0, column=1, columnspan=2, padx=5, pady=5, sticky="w")
+
         self.max_size_entry = ctk.CTkEntry(button_frame2)
-        self.max_size_entry.pack(side="left", padx=5)
-        ctk.CTkLabel(button_frame2, text="GB").pack(side="left", padx=5)
+        self.max_size_entry.grid(row=0, column=0, padx=5, pady=5, sticky="w")
+    
+        ctk.CTkLabel(button_frame2, text="GB").grid(row=0, column=1, padx=5, pady=5, sticky="w") 
+    
         self.max_size_entry.insert(0, "10")
+
+        self.update_settings_button = ctk.CTkButton(button_frame2, text="Update Settings", width=80, command=self.update_settings)
+        self.update_settings_button.grid(row=0, column=3, padx=5, pady=5, sticky="w")
 
         # IP Geofiltering Buttons
         ctk.CTkLabel(self.settings_tab, text="IP Geofiltering:").grid(row=1, column=0, padx=10, pady=5, sticky="w")
 
         button_frame = ctk.CTkFrame(self.settings_tab)
         button_frame.grid(row=1, column=1, columnspan=4, padx=5, pady=5, sticky="w")
-        self.include_button = ctk.CTkButton(button_frame, text="Include", width=80)
-        self.include_button.pack(side="left", padx=5)
-        self.exclude_button = ctk.CTkButton(button_frame, text="Exclude", width=80)
-        self.exclude_button.pack(side="left", padx=5)
-        ctk.CTkLabel(button_frame, text="Current Location:").pack(side="left", padx=5)
-        self.current_place_entry = ctk.CTkEntry(button_frame)
-        self.current_place_entry.pack(side="left", padx=5)
 
-        ctk.CTkLabel(self.settings_tab, text="Add place to list:").grid(row=2, column=0, padx=10, pady=5, sticky="w")
-        self.add_location_entry = ctk.CTkEntry(self.settings_tab)
-        self.add_location_entry.grid(row=2, column=1, padx=10, pady=5, sticky="w")
+        self.include_button = ctk.CTkButton(button_frame, text="Include", width=80, command=lambda: self.handle_include_exclude("Include"))
+        self.include_button.grid(row=0, column=0, padx=5, pady=5) 
+    
+        self.exclude_button = ctk.CTkButton(button_frame, text="Exclude", width=80, command=lambda: self.handle_include_exclude("Exclude"))
+        self.exclude_button.grid(row=0, column=1, padx=5, pady=5)  
+    
+        ctk.CTkLabel(button_frame, text="Current Location:").grid(row=0, column=2, padx=5, pady=5)  
+    
+        self.current_place_entry = ctk.CTkEntry(button_frame)
+        self.current_place_entry.grid(row=0, column=3, padx=5, pady=5)  
+    
+        self.current_place_entry.insert(0, self.get_current_location())
+        self.current_place_entry.configure(state="readonly")
+
+        # Location blacklist
+        button_frame4 = ctk.CTkFrame(self.settings_tab)
+        button_frame4.grid(row=2, column=1, columnspan=3, padx=5, pady=5, sticky="w")  
+
+        ctk.CTkLabel(button_frame4, text="Add/remove place to list:").grid(row=0, column=0, padx=10, pady=5, sticky="w")
+
+        self.location_entry = ctk.CTkEntry(button_frame4)
+        self.location_entry.grid(row=0, column=1, padx=5, pady=5) 
+    
+        self.add_location_button = ctk.CTkButton(button_frame4, text="Add", width=80, command=self.add_location)
+        self.add_location_button.grid(row=0, column=2, padx=5, pady=5) 
+
+        self.remove_location_button = ctk.CTkButton(button_frame4, text="Remove", width=80, command=self.remove_location)
+        self.remove_location_button.grid(row=0, column=3, padx=5, pady=5) 
 
         self.location_list = ctk.CTkTextbox(self.settings_tab, height=200, width=400)
         self.location_list.grid(row=3, column=1, padx=10, pady=5)
+
         self.list_state_entry = ctk.CTkEntry(self.settings_tab, width=415)
         self.list_state_entry.grid(row=3, column=2, padx=10, pady=5, sticky="w")
-        self.list_state_entry.insert(0, "Currently INCLUDING all list entries as valid places to receive files from")
+    
+        self.handle_include_exclude("Include")
         self.list_state_entry.configure(state="readonly")
 
         # Maximum Transfers Setting
         ctk.CTkLabel(self.settings_tab, text="Maximum number of incoming transfers at a time:").grid(row=4, column=0, padx=10, pady=5, sticky="w")
+    
         self.max_transfers_entry = ctk.CTkEntry(self.settings_tab)
         self.max_transfers_entry.grid(row=4, column=1, padx=10, pady=5, sticky="w")
+    
         self.max_transfers_entry.insert(0, "1")
 
         # Blacklisted file extensions
-        ctk.CTkLabel(self.settings_tab, text="Blacklisted file extenstions:").grid(row=5, column=0, padx=10, pady=5, sticky="w")
-        
+        ctk.CTkLabel(self.settings_tab, text="Blacklisted file extensions:").grid(row=5, column=0, padx=10, pady=5, sticky="w")
+
         button_frame3 = ctk.CTkFrame(self.settings_tab)
-        button_frame3.grid(row=5, column=1, columnspan=2, padx=5, pady=5, sticky="w")
+        button_frame3.grid(row=5, column=1, columnspan=3, padx=5, pady=5, sticky="w")
+
         self.blacklisted_extenstions_entry = ctk.CTkEntry(button_frame3)
-        self.blacklisted_extenstions_entry.pack(side="left", padx=5)
-        self.add_extension_button = ctk.CTkButton(button_frame3, text="Add", width=80)
-        self.add_extension_button.pack(side="left", padx=5)
+        self.blacklisted_extenstions_entry.grid(row=0, column=0, padx=5, pady=5) 
+
+        self.add_extension_button = ctk.CTkButton(button_frame3, text="Add", width=80, command=self.add_extension)
+        self.add_extension_button.grid(row=0, column=1, padx=5, pady=5)  
+
+        self.remove_extension_button = ctk.CTkButton(button_frame3, text="Remove", width=80, command=self.remove_extension)
+        self.remove_extension_button.grid(row=0, column=2, padx=5, pady=5)  
 
         self.extensions_list = ctk.CTkTextbox(self.settings_tab, height=200, width=400)
         self.extensions_list.grid(row=6, column=1, padx=10, pady=5)
+        self.update_extensions_list()
+
+
+    def update_settings(self):
+        try:
+            """Updates settings"""
+            self.user_settings.max_size = int(self.max_size_entry.get())
+            locations = self.location_list.get("1.0", "end").strip().split("\n")
+            self.user_settings.locations_list = [loc for loc in locations if loc]
+            self.user_settings.max_transfers = int(self.max_transfers_entry.get())
+            extensions = self.extensions_list.get("1.0", "end").strip().split("\n")
+            self.user_settings.file_extension_blacklist = [ext for ext in extensions if ext]
+            self.export_settings()
+        except ValueError:
+            messagebox.showerror("Error", "Max size and max transfers must be numbers")
+        except Exception as e:
+            messagebox.showerror("Error", f"Unexpected error updating settings: {e}")
+
+    def export_settings(self):
+        """Exports user settings to a json file"""
+        #self.user_settings.max_size = self.max_size_entry.get()
+        #self.user_settings.max_transfers = self.max_transfers_entry.get()
+
+        try:
+            dict = asdict(self.user_settings)
+            with open("bin/user_settings.json", "w", encoding="utf-8") as json_file:
+                json.dump(dict, json_file, indent=4)
+            print(f"User settings exported successfully")
+        except Exception as e:
+            print(f"Error exporting user settings: {e}")
+
+    def add_location(self):
+        """Adds a location to the blacklist and updates the GUI"""
+        value = self.location_entry.get().strip()
+        if not value:
+            messagebox.showwarning("Settings", "Nothing happened. No location entered.")
+
+        if value in self.user_settings.locations_list:
+            messagebox.showwarning("Settings", "Location is already in the list.")
+            return
+    
+        self.user_settings.locations_list.append(value)
+        self.update_locations_list()
+        self.location_entry.delete(0, "end")
+
+    def remove_location(self):
+        """Removes a location from the list and updates the GUI"""
+        value = self.location_entry.get().strip()
+        if not value:
+            messagebox.showwarning("Settings", "Nothing happened")
+
+        if value in self.user_settings.locations_list:
+            self.user_settings.locations_list.remove(value)
+            self.update_locations_list()
+            self.location_entry.delete(0, "end")
+        else:
+            messagebox.showinfo("Settings", "Location not found in the list.")
+
+    def update_locations_list(self):    
+        """Updates the GUI of the locations list"""
+        self.location_list.configure(state="normal")
+        self.location_list.delete("1.0", "end")
+        for location in self.user_settings.locations_list:
+            self.location_list.insert("end", location + "\n")
+        self.location_list.configure(state="disabled")
+
+    def handle_include_exclude(self, value):
+        """Hanldes the logic between the include/exclude buttons"""
+        if not value:
+            messagebox.showerror("Settings", "something went horribly wrong")
+
+        if value == "Include":
+            self.user_settings.list_state = 0
+            self.include_button.configure(fg_color="#14456B")
+            self.exclude_button.configure(fg_color="#1F6AA5")
+            self.list_state_entry.configure(state="normal")
+            self.list_state_entry.delete(0, "end")
+            self.list_state_entry.insert(0, "Currently INCLUDING locations in blacklist")
+            self.list_state_entry.configure(state="readonly")
+        elif value == "Exclude":
+            self.user_settings.list_state = 1
+            self.exclude_button.configure(fg_color="#14456B")
+            self.include_button.configure(fg_color="#1F6AA5")
+            self.list_state_entry.configure(state="normal")
+            self.list_state_entry.delete(0, "end")
+            self.list_state_entry.insert(0, "Currently EXCLUDING locations in blacklist")
+            self.list_state_entry.configure(state="readonly")
+
+    def get_current_location(self):
+        """Gets current location. Returns country not IP"""
+        try:
+            response = requests.get("https://ipinfo.io/json", timeout=5)
+            response.raise_for_status()
+            data = response.json()
+            country = data.get("country", "Unknown/Error")
+
+            return country
+        except requests.RequestException as e:
+            return f"Unable to fetch location: {e}"
+
+    def add_extension(self):
+        """Adds an extension to the blacklist and updates the GUI"""
+        value = self.blacklisted_extenstions_entry.get().strip()
+        if not value:
+            messagebox.showwarning("Settings", "Nothing happened")
+
+        if value in self.user_settings.file_extension_blacklist:
+            messagebox.showwarning("Settings", "Extension is already in blacklist")
+            return
+        
+        self.user_settings.file_extension_blacklist.append(value)
+        self.update_extensions_list()
+        self.blacklisted_extenstions_entry.delete(0, "end")
+
+    def remove_extension(self):
+        """Removes and extension from the blacklist and upadtes the GUI"""
+        value = self.blacklisted_extenstions_entry.get().strip()
+        if not value:
+            messagebox.showwarning("Settings", "Nothing happened")
+
+        if value in self.user_settings.file_extension_blacklist:
+            self.user_settings.file_extension_blacklist.remove(value)
+            self.update_extensions_list()
+            self.blacklisted_extenstions_entry.delete(0, "end")
+        else:
+            messagebox.showinfo("Settings", "Nothing happened")
+
+    def update_extensions_list(self):
+        """Updates the GUI that shows the blacklisted extensions"""
+        self.extensions_list.configure(state="normal")
+        self.extensions_list.delete("1.0", "end")
+        for extension in self.user_settings.file_extension_blacklist:
+            self.extensions_list.insert("end", extension+"\n")
+        self.extensions_list.configure(state="disabled")
 
     def draw_login_tab(self):
         for widget in self.login_tab.winfo_children():
@@ -566,6 +738,7 @@ class P2PApp:
     def login(self):
         """Handles the login button click."""
         username = self.username_entry.get()
+        self.export_settings()
 
         if len(username) > 16:
             raise ValueError("Username cannot be longer than 16 characters")
