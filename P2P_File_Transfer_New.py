@@ -323,14 +323,10 @@ def setup_port_forwarding(default_gateway, port, description="P2P Program"):
 
 @dataclass
 class settings_state:
-    #max file size
     max_size: int = 10
-    #ip geofiltering
-    list_state: int = 0 #0 for include, 1 for exclude
+    list_state: int = 0 #0 for BLACKLIST, 1 for WHITELIST
     locations_list = []
-    #max transfers
     max_transfers: int = 1
-    #blacklisted file extensions
     file_extension_blacklist = []
 
 @dataclass
@@ -372,6 +368,7 @@ class P2PApp:
         self.tabview._segmented_button.configure(command=self.on_tab_change)
 
     def on_tab_change(self, value=None):
+        """Handles the tab switch"""
         if self.user_state.logged_in == False:
             return
 
@@ -416,10 +413,10 @@ class P2PApp:
         button_frame = ctk.CTkFrame(self.settings_tab)
         button_frame.grid(row=1, column=1, columnspan=4, padx=5, pady=5, sticky="w")
 
-        self.include_button = ctk.CTkButton(button_frame, text="Include", width=80, command=lambda: self.handle_include_exclude("Include"))
+        self.include_button = ctk.CTkButton(button_frame, text="Blacklist", width=80, command=lambda: self.handle_include_exclude("Blacklist"))
         self.include_button.grid(row=0, column=0, padx=5, pady=5) 
     
-        self.exclude_button = ctk.CTkButton(button_frame, text="Exclude", width=80, command=lambda: self.handle_include_exclude("Exclude"))
+        self.exclude_button = ctk.CTkButton(button_frame, text="Whitelist", width=80, command=lambda: self.handle_include_exclude("Whitelist"))
         self.exclude_button.grid(row=0, column=1, padx=5, pady=5)  
     
         ctk.CTkLabel(button_frame, text="Current Location:").grid(row=0, column=2, padx=5, pady=5)  
@@ -550,21 +547,21 @@ class P2PApp:
         if not value:
             messagebox.showerror("Settings", "something went horribly wrong")
 
-        if value == "Include":
+        if value == "Blacklist":
             self.user_settings.list_state = 0
             self.include_button.configure(fg_color="#14456B")
             self.exclude_button.configure(fg_color="#1F6AA5")
             self.list_state_entry.configure(state="normal")
             self.list_state_entry.delete(0, "end")
-            self.list_state_entry.insert(0, "Currently INCLUDING locations in blacklist")
+            self.list_state_entry.insert(0, "BLACKLIST")
             self.list_state_entry.configure(state="readonly")
-        elif value == "Exclude":
+        elif value == "Whitelist":
             self.user_settings.list_state = 1
             self.exclude_button.configure(fg_color="#14456B")
             self.include_button.configure(fg_color="#1F6AA5")
             self.list_state_entry.configure(state="normal")
             self.list_state_entry.delete(0, "end")
-            self.list_state_entry.insert(0, "Currently EXCLUDING locations in blacklist")
+            self.list_state_entry.insert(0, "WHITELIST")
             self.list_state_entry.configure(state="readonly")
 
     def get_current_location(self):
@@ -738,7 +735,6 @@ class P2PApp:
     def login(self):
         """Handles the login button click."""
         username = self.username_entry.get()
-        self.export_settings()
 
         if len(username) > 16:
             raise ValueError("Username cannot be longer than 16 characters")
@@ -783,6 +779,7 @@ class P2PApp:
     def register(self):
         """Handles the register button click with secure key generation."""
         username = self.username_entry.get()
+        self.export_settings()
 
         if len(username) > 16:
             raise ValueError("Username cannot be longer than 16 characters")
@@ -803,6 +800,17 @@ class P2PApp:
 
             with open(identifier_file, "w") as f:
                 f.write(random_string)
+
+            try:
+                with open("bin/user_settings.json", "r", encoding="utf-8") as json_file:
+                    json_data = json.load(json_file)
+                    json_string = json.dumps(json_data)
+            except FileNotFoundError:
+                print("Error: JSON file not found")
+                return
+            except json.JSONDecodeError:
+                print("Error: Json file error")
+                return
 
             os.chmod(identifier_file, stat.S_IRUSR | stat.S_IWUSR)
 
