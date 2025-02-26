@@ -696,6 +696,7 @@ class P2PApp:
 
         if "ACCEPT-FRIEND SUCCESS" in response:
             messagebox.showinfo("Friend Request", f"Friend request sent to {friend_username}.")
+        self.update_friends_list()
 
     def remove_friend(self):
         """Removes a friend from the friend list."""
@@ -715,6 +716,8 @@ class P2PApp:
             messagebox.showinfo("Remove Friend", f"{friend_username} has been removed from your friends list.")
         else:
             messagebox.showerror("Remove Friend", response)
+        self.update_friends_list()
+
 
     def log_message(self, widget, message):
         """Logs a message to a specific Text widget."""
@@ -767,14 +770,41 @@ class P2PApp:
 
     def select_and_send_file(self):
         """Opens a file dialog and sends the selected file."""
-        recipiant_username = self.to_entry.get()
+        recipient_username = self.to_entry.get()
         username = self.username_entry.get()
         file_path = filedialog.askopenfilename(title="Select a File")
+
+        if not recipient_username:
+            messagebox.showwarning("Send File", "Please enter a recipient username.")
+            return
+
+        if not file_path:
+            messagebox.showwarning("Send File", "No file selected.")
+            return
+
+        response = send_to_server("LIST-FRIENDS", self.user_state.username, None, None, None, None, None)
+
+        if "LIST-FRIENDS SUCCESS" in response:
+            try:
+                friends_json = json.loads(response.replace("LIST-FRIENDS SUCCESS ", "").replace("EOF", ""))
+                friend_usernames = {friend.get("username") for friend in friends_json}
+
+                if recipient_username not in friend_usernames:
+                    messagebox.showwarning("Send File", f"{recipient_username} is not in your friend list. Add them first.")
+                    return
+
+            except json.JSONDecodeError:
+                messagebox.showerror("Send File", "Error retrieving friend list. Try again later.")
+                return
+        else:
+            messagebox.showerror("Send File", "Failed to retrieve friend list from server.")
+            return
+
         if file_path:
             self.client_log_callback(f"Selected file: {file_path}")
             host, port = self.get_host_and_port()
             if host and port:
-                threading.Thread(target=client, args=(username, file_path, self.client_log_callback, recipiant_username), daemon=True).start()
+                threading.Thread(target=client, args=(username, file_path, self.client_log_callback, recipient_username), daemon=True).start()
 
     def login(self):
         """Handles the login button click."""
