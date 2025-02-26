@@ -194,7 +194,7 @@ def client(username, filename, client_log_callback, recipient_username):
     try:
         # Fetch recipient information
         client_log_callback("[CLIENT][AUTH_SERVER][GET PACKET 1] Seeing if recipiant exists")
-        response = send_to_server("GET", recipient_username, None, None, None, None)
+        response = send_to_server("GET", recipient_username, None, None, None, None, None)
         client_log_callback(f"Server response: {response}")
 
         parts = response.split()
@@ -212,7 +212,7 @@ def client(username, filename, client_log_callback, recipient_username):
         recipient_port = int(parts[4])
 
         client_log_callback("[CLIENT][AUTH_SERVER][INITIATE] Sending initiate packet")
-        response = send_to_server("INITIATE", username, None, None, recipient_ip, recipient_port)
+        response = send_to_server("INITIATE", username, None, None, recipient_ip, recipient_port, None)
         client_log_callback(f"[CLIENT][AUTH_SERVER][INITATE] Response received")
 
         with open('client_cert.pem', 'w') as file:
@@ -651,8 +651,7 @@ class P2PApp:
         self.logout_button = ctk.CTkButton(self.file_sharing_tab, text="Logout", command=self.logout)
         self.logout_button.grid(row=4, column=3, padx=10, pady=5, sticky="w")
 
-        #Friends Section
-        ctk.CTkLabel(self.file_sharing_tab, text="Friends").grid(row=4, column=0, padx=10, pady=5, sticky="w")
+        
 
         # Client Section
         ctk.CTkLabel(self.file_sharing_tab, text="Send").grid(row=0, column=2, padx=10, pady=5, sticky="w")
@@ -666,6 +665,56 @@ class P2PApp:
 
         # Default download directory
         self.download_dir = os.getcwd()
+
+        # Friends List
+        ctk.CTkLabel(self.file_sharing_tab, text="Friends").grid(row=0, column=1, padx=10, pady=5, sticky="w")
+        self.friends_list = ctk.CTkTextbox(self.file_sharing_tab, height=200, width=200)
+        self.friends_list.grid(row=1, column=1, padx=10, pady=5)
+        
+        button_frame = ctk.CTkFrame(self.file_sharing_tab)
+        button_frame.grid(row=2, column=1, padx=10, pady=5, sticky="w")
+        
+        self.friend_entry = ctk.CTkEntry(button_frame)
+        self.friend_entry.grid(row=0, column=0, padx=5, pady=5)
+        ctk.CTkButton(button_frame, text="Add", command=self.add_friend).grid(row=0, column=1, padx=5, pady=5)
+        ctk.CTkButton(button_frame, text="Remove", command=self.remove_friend).grid(row=0, column=2, padx=5, pady=5)
+        ctk.CTkLabel(self.file_sharing_tab, text="PENDING requests can be acceptd by entering the username of the requester and hitting Add").grid(row=3, column=1, padx=5, pady=5)
+    
+    def add_friend(self):
+        """Sends a friend request to the server."""
+        friend_username = self.friend_entry.get().strip()
+    
+        if not friend_username:
+            messagebox.showwarning("Friend Request", "Please enter a username to send a friend request.")
+            return
+    
+        if friend_username == self.user_state.username:
+            messagebox.showwarning("Friend Request", "You cannot add yourself as a friend.")
+            return
+
+        response = send_to_server("SEND-FRIEND", self.user_state.username, None, None, None, None, friend_username)
+
+        if "ACCEPT-FRIEND SUCCESS" in response:
+            messagebox.showinfo("Friend Request", f"Friend request sent to {friend_username}.")
+
+    def remove_friend(self):
+        """Removes a friend from the friend list."""
+        friend_username = self.friend_entry.get().strip()
+
+        if not friend_username:
+            messagebox.showwarning("Remove Friend", "Please enter a username to remove from your friends list.")
+            return
+
+        if friend_username == self.user_state.username:
+            messagebox.showwarning("Remove Friend", "You cannot remove yourself.")
+            return
+
+        response = send_to_server("REMOVE-FRIEND", self.user_state.username, None, None, None, None, friend_username)
+
+        if "REMOVE-FRIEND SUCCESS" in response:
+            messagebox.showinfo("Remove Friend", f"{friend_username} has been removed from your friends list.")
+        else:
+            messagebox.showerror("Remove Friend", response)
 
     def log_message(self, widget, message):
         """Logs a message to a specific Text widget."""
@@ -684,7 +733,7 @@ class P2PApp:
 
     def get_host_and_port(self):
         """Gets the host and port from the GUI input fields."""
-        host = self.host_entry.get()
+        host = get_ip()
         try:
             port = int(self.port_entry.get())
             if port < 1 or port > 65535:
@@ -785,12 +834,42 @@ class P2PApp:
                 else:
                     print("Error retrieving settings:", settings_response)
 
+                self.update_friends_list()
+
         except FileNotFoundError as e:
             messagebox.showerror("Error", f"File Error: {e}")
         except ValueError as e:
             messagebox.showerror("Error", f"Value Error: {e}")
         except Exception as e:
             messagebox.showerror("Error", f"An unexpected error occurred: {e}")
+
+    def update_friends_list(self):
+        """Fetches the friends list from the server and updates the UI."""
+        response = send_to_server("LIST-FRIENDS", self.user_state.username, None, None, None, None, None)
+
+        if "LIST-FRIENDS EMPTY" in response:
+            self.friends_list.configure(state="normal")
+            self.friends_list.delete("1.0", "end")
+            self.friends_list.insert("end", "No friends found.\n")
+            self.friends_list.configure(state="disabled")
+            return
+
+        if "LIST-FRIENDS SUCCESS" in response:
+            try:
+                friends_json = json.loads(response.replace("LIST-FRIENDS SUCCESS ", "").replace("EOF", ""))
+                self.friends_list.configure(state="normal")
+                self.friends_list.delete("1.0", "end")
+
+                for friend in friends_json:
+                    username = friend.get("username")
+                    status = friend.get("status")
+                    self.friends_list.insert("end", f"{username} - {status}\n")
+
+                self.friends_list.configure(state="disabled")
+            except json.JSONDecodeError:
+                print("Error: Received invalid friends list data.")
+        else:
+            print("Error retrieving friends list:", response)
 
     def apply_settings_to_ui(self):
         """Updates the UI elements with the latest settings from self.user_settings."""
