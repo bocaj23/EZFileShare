@@ -464,6 +464,7 @@ class P2PApp:
         self.extensions_list = ctk.CTkTextbox(self.settings_tab, height=200, width=400)
         self.extensions_list.grid(row=6, column=1, padx=10, pady=5)
         self.update_extensions_list()
+        self.apply_settings_to_ui()
 
 
     def update_settings(self):
@@ -488,11 +489,10 @@ class P2PApp:
                 "file_extension_blacklist": list(self.user_settings.file_extension_blacklist)
             }
             response = send_to_server("UPDATE-SETTINGS", self.user_state.username, None, None, None, None, settings_dict)
+            response = response.strip()
 
             if "UPDATE-SETTINGS SUCCESS" in response:
                 messagebox.showinfo("Settings", "Settings updated successfully")
-            else:
-                messagebox.showerror("Error", f"Failed to update settings: {response}")
 
             messagebox.showinfo("Settings", "Settings updated successfully.")
         except ValueError:
@@ -775,6 +775,11 @@ class P2PApp:
 
                         print("User settings successfully updated from server.")
 
+                        self.user_settings.max_size = settings_json.get("max_size", 10)
+                        self.user_settings.locations_list = settings_json.get("locations_list", [])
+                        self.user_settings.max_transfers = settings_json.get("max_transfers", 1)
+                        self.user_settings.file_extension_blacklist = settings_json.get("file_extension_blacklist", [])
+
                     except json.JSONDecodeError:
                         print("Error: Received invalid settings data.")
                 else:
@@ -786,6 +791,26 @@ class P2PApp:
             messagebox.showerror("Error", f"Value Error: {e}")
         except Exception as e:
             messagebox.showerror("Error", f"An unexpected error occurred: {e}")
+
+    def apply_settings_to_ui(self):
+        """Updates the UI elements with the latest settings from self.user_settings."""
+        self.max_size_entry.delete(0, "end")
+        self.max_size_entry.insert(0, str(self.user_settings.max_size))
+
+        self.max_transfers_entry.delete(0, "end")
+        self.max_transfers_entry.insert(0, str(self.user_settings.max_transfers))
+
+        self.location_list.configure(state="normal")
+        self.location_list.delete("1.0", "end")
+        for location in self.user_settings.locations_list:
+            self.location_list.insert("end", location + "\n")
+        self.location_list.configure(state="disabled")
+
+        self.extensions_list.configure(state="normal")
+        self.extensions_list.delete("1.0", "end")
+        for ext in self.user_settings.file_extension_blacklist:
+            self.extensions_list.insert("end", ext + "\n")
+        self.extensions_list.configure(state="disabled")
 
     def register(self):
         """Handles the register button click with secure key generation."""
