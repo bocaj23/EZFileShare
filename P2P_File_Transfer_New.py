@@ -31,14 +31,14 @@ def get_ip():
     except requests.RequestException as e:
         return f"Unable to fetch public ip: {e}"
 
-def send_to_server(endpoint, username, password, identifier, ip, port):
+def send_to_server(endpoint, username, password, identifier, ip, port, settings):
     """Sends data to the remote server securely using an SSL socket."""
     server_host = "50.19.225.62"
     server_port = 6223
     
     script_dir = os.path.dirname(os.path.abspath(__file__))
     
-    payload = f"{endpoint.upper()} {username} {password} {identifier} {ip} {port}\n"
+    payload = f"{endpoint.upper()} {username} {password} {identifier} {ip} {port} {settings}\n"
 
     context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH, cafile=AUTHCERTFILE)
 
@@ -324,7 +324,6 @@ def setup_port_forwarding(default_gateway, port, description="P2P Program"):
 @dataclass
 class settings_state:
     max_size: int = 10
-    list_state: int = 0 #0 for BLACKLIST, 1 for WHITELIST
     locations_list = []
     max_transfers: int = 1
     file_extension_blacklist = []
@@ -412,12 +411,6 @@ class P2PApp:
 
         button_frame = ctk.CTkFrame(self.settings_tab)
         button_frame.grid(row=1, column=1, columnspan=4, padx=5, pady=5, sticky="w")
-
-        self.include_button = ctk.CTkButton(button_frame, text="Blacklist", width=80, command=lambda: self.handle_include_exclude("Blacklist"))
-        self.include_button.grid(row=0, column=0, padx=5, pady=5) 
-    
-        self.exclude_button = ctk.CTkButton(button_frame, text="Whitelist", width=80, command=lambda: self.handle_include_exclude("Whitelist"))
-        self.exclude_button.grid(row=0, column=1, padx=5, pady=5)  
     
         ctk.CTkLabel(button_frame, text="Current Location:").grid(row=0, column=2, padx=5, pady=5)  
     
@@ -444,12 +437,6 @@ class P2PApp:
 
         self.location_list = ctk.CTkTextbox(self.settings_tab, height=200, width=400)
         self.location_list.grid(row=3, column=1, padx=10, pady=5)
-
-        self.list_state_entry = ctk.CTkEntry(self.settings_tab, width=415)
-        self.list_state_entry.grid(row=3, column=2, padx=10, pady=5, sticky="w")
-    
-        self.handle_include_exclude("Include")
-        self.list_state_entry.configure(state="readonly")
 
         # Maximum Transfers Setting
         ctk.CTkLabel(self.settings_tab, text="Maximum number of incoming transfers at a time:").grid(row=4, column=0, padx=10, pady=5, sticky="w")
@@ -481,29 +468,59 @@ class P2PApp:
 
     def update_settings(self):
         try:
-            """Updates settings"""
             self.user_settings.max_size = int(self.max_size_entry.get())
+            self.user_settings.max_transfers = int(self.max_transfers_entry.get())
+
+            # Update locations list
             locations = self.location_list.get("1.0", "end").strip().split("\n")
             self.user_settings.locations_list = [loc for loc in locations if loc]
-            self.user_settings.max_transfers = int(self.max_transfers_entry.get())
+
+            # Update file extensions list
             extensions = self.extensions_list.get("1.0", "end").strip().split("\n")
             self.user_settings.file_extension_blacklist = [ext for ext in extensions if ext]
+
+            # Export settings to JSON
             self.export_settings()
+            settings_dict = {
+                "max_size": self.user_settings.max_size,
+                "locations_list": list(self.user_settings.locations_list),
+                "max_transfers": self.user_settings.max_transfers,
+                "file_extension_blacklist": list(self.user_settings.file_extension_blacklist)
+            }
+            response = send_to_server("UPDATE-SETTINGS", self.user_state.username, None, None, None, None, settings_dict)
+
+            if "UPDATE-SETTINGS SUCCESS" in response:
+                messagebox.showinfo("Settings", "Settings updated successfully")
+            else:
+                messagebox.showerror("Error", f"Failed to update settings: {response}")
+
+            messagebox.showinfo("Settings", "Settings updated successfully.")
         except ValueError:
-            messagebox.showerror("Error", "Max size and max transfers must be numbers")
+            messagebox.showerror("Error", "Max size and max transfers must be numbers.")
         except Exception as e:
             messagebox.showerror("Error", f"Unexpected error updating settings: {e}")
 
     def export_settings(self):
         """Exports user settings to a json file"""
-        #self.user_settings.max_size = self.max_size_entry.get()
-        #self.user_settings.max_transfers = self.max_transfers_entry.get()
-
         try:
-            dict = asdict(self.user_settings)
+            # Convert dataclass to a dictionary
+            settings_dict = {
+                "max_size": self.user_settings.max_size,
+                "locations_list": list(self.user_settings.locations_list),
+                "max_transfers": self.user_settings.max_transfers,
+                "file_extension_blacklist": list(self.user_settings.file_extension_blacklist)
+            }
+
+            print(settings_dict)
+
+            # Ensure directory exists
+            os.makedirs("bin", exist_ok=True)
+
             with open("bin/user_settings.json", "w", encoding="utf-8") as json_file:
-                json.dump(dict, json_file, indent=4)
-            print(f"User settings exported successfully")
+                json.dump(settings_dict, json_file, indent=4)
+
+            print("User settings exported successfully.")
+
         except Exception as e:
             print(f"Error exporting user settings: {e}")
 
@@ -541,28 +558,6 @@ class P2PApp:
         for location in self.user_settings.locations_list:
             self.location_list.insert("end", location + "\n")
         self.location_list.configure(state="disabled")
-
-    def handle_include_exclude(self, value):
-        """Hanldes the logic between the include/exclude buttons"""
-        if not value:
-            messagebox.showerror("Settings", "something went horribly wrong")
-
-        if value == "Blacklist":
-            self.user_settings.list_state = 0
-            self.include_button.configure(fg_color="#14456B")
-            self.exclude_button.configure(fg_color="#1F6AA5")
-            self.list_state_entry.configure(state="normal")
-            self.list_state_entry.delete(0, "end")
-            self.list_state_entry.insert(0, "BLACKLIST")
-            self.list_state_entry.configure(state="readonly")
-        elif value == "Whitelist":
-            self.user_settings.list_state = 1
-            self.exclude_button.configure(fg_color="#14456B")
-            self.include_button.configure(fg_color="#1F6AA5")
-            self.list_state_entry.configure(state="normal")
-            self.list_state_entry.delete(0, "end")
-            self.list_state_entry.insert(0, "WHITELIST")
-            self.list_state_entry.configure(state="readonly")
 
     def get_current_location(self):
         """Gets current location. Returns country not IP"""
@@ -756,7 +751,7 @@ class P2PApp:
             if not key_string:
                 raise ValueError("The identifier.pem file is empty or corrupted.")
 
-            response = send_to_server("LOGIN", username, password, key_string, ip, port)
+            response = send_to_server("LOGIN", username, password, key_string, ip, port, None)
 
             messagebox.showinfo("Login Response", response)
 
@@ -768,6 +763,22 @@ class P2PApp:
                 self.user_state.logged_in = True
                 self.tabview.set("File Sharing")
                 self.draw_file_sharing_tab()
+
+                settings_response = send_to_server("GET-SETTINGS", username, None, None, None, None, None)
+
+                if "GET-SETTINGS SUCCESS" in settings_response:
+                    try:
+                        settings_json = json.loads(settings_response.replace("GET-SETTINGS SUCCESS ", "").replace("EOF", ""))
+                    
+                        with open("bin/user_settings.json", "w", encoding="utf-8") as json_file:
+                            json.dump(settings_json, json_file, indent=4)
+
+                        print("User settings successfully updated from server.")
+
+                    except json.JSONDecodeError:
+                        print("Error: Received invalid settings data.")
+                else:
+                    print("Error retrieving settings:", settings_response)
 
         except FileNotFoundError as e:
             messagebox.showerror("Error", f"File Error: {e}")
@@ -787,6 +798,7 @@ class P2PApp:
         password = self.password_entry.get()
         ip = get_ip()
         port = self.port_entry.get()
+        
 
         script_dir = os.path.dirname(os.path.abspath(__file__))
         identifier_file = os.path.join(script_dir, "identifier.pem")
@@ -816,7 +828,7 @@ class P2PApp:
 
             messagebox.showinfo("Key File Generated", "A new identifier.pem file has been created.")
 
-            response = send_to_server("REGISTER", username, password, random_string, ip, port)
+            response = send_to_server("REGISTER", username, password, random_string, ip, port, json_string)
 
             messagebox.showinfo("Register Response", response)
 
