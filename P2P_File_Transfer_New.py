@@ -40,12 +40,12 @@ def send_to_server(endpoint, username, password, identifier, ip, port, settings)
     
     payload = f"{endpoint.upper()} {username} {password} {identifier} {ip} {port} {settings}\n"
 
-    context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH, cafile=AUTHCERTFILE)
+    context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
 
     #client only sends one message and server sends one message back
     try:
         with socket.create_connection((server_host, server_port)) as sock:
-            with context.wrap_socket(sock, server_hostname=server_host) as secure_sock:
+            with context.wrap_socket(sock, server_hostname="forestgardenplantshop.com") as secure_sock:
                 print("Connection established with the server.")
                 
                 secure_sock.sendall(payload.encode('utf-8'))
