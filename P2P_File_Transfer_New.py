@@ -679,6 +679,7 @@ class P2PApp:
         ctk.CTkButton(button_frame, text="Add", command=self.add_friend).grid(row=0, column=1, padx=5, pady=5)
         ctk.CTkButton(button_frame, text="Remove", command=self.remove_friend).grid(row=0, column=2, padx=5, pady=5)
         ctk.CTkLabel(self.file_sharing_tab, text="PENDING requests can be acceptd by entering the username of the requester and hitting Add").grid(row=3, column=1, padx=5, pady=5)
+        self.update_friends_list()
     
     def add_friend(self):
         """Sends a friend request to the server."""
@@ -768,6 +769,19 @@ class P2PApp:
             self.command_queue.put(("set_download_dir", selected_dir))
             self.server_log_callback(f"Download directory set to: {self.download_dir}")
 
+    def log_import_History(username, file_path, recipient_username):
+        """Logs the file import history."""
+        log_entry = f"{datetime.datetime.now()} - {username} sent {file_path} to {recipient_username}\n"
+    
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        log_file = os.path.join(script_dir, "file_import_log.txt")
+
+        try:
+            with open(log_file, "a") as f:
+                f.write(log_entry)
+        except Exception as e:
+            print(f"Error logging file import: {e}")
+
     def select_and_send_file(self):
         """Opens a file dialog and sends the selected file."""
         recipient_username = self.to_entry.get()
@@ -803,6 +817,7 @@ class P2PApp:
         if file_path:
             self.client_log_callback(f"Selected file: {file_path}")
             host, port = self.get_host_and_port()
+            self.log_import_History(username, file_path, recipient_username)
             if host and port:
                 threading.Thread(target=client, args=(username, file_path, self.client_log_callback, recipient_username), daemon=True).start()
 
