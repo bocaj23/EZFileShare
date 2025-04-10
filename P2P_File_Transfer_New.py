@@ -204,8 +204,10 @@ def facilitated_server(host, port, command_queue, server_log_callback):
         server_socket.listen(5)
         server_log_callback(f"Server listening on {host}:{port}")
         with context.wrap_socket(server_socket, server_side=True) as secure_socket:
+            conn, addr = secure_socket.accept()
             while True:
-                continue
+                data = conn.recv(BUFFER_SIZE)
+                print(data)
             
 def facilitated_client(username, filename, client_log_callback, recipient_username, curr_location):
     """Runs a Facilitated P2P file share with integrity verification"""
@@ -353,6 +355,7 @@ def setup_port_forwarding(default_gateway, port, description="P2P Program"):
         
         # Discover UPnP devices
         devices = upnp.discover()
+        print(f"{devices}")
         if not devices:
             return "No UPnP devices found. Ensure UPnP is enabled on your router."
 
