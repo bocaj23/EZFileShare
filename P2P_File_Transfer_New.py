@@ -14,6 +14,8 @@ from dataclasses import asdict
 import requests
 import upnpy
 import json
+import datetime
+from pathlib import Path
 
 
 # Constants
@@ -22,6 +24,8 @@ BUFFER_SIZE = 4096
 CERTFILE = "cert.pem"
 KEYFILE = "key.pem"
 AUTHCERTFILE = "authcert.pem"
+
+FACILITATED = True
 
 def get_ip():
     try:
@@ -188,6 +192,70 @@ def handle_client_cert_exchange(conn, addr, current_dir, log_callback):
             log_callback(f"Connection with {addr} closed.")
         except Exception as e:
             log_callback(f"Error closing connection: {e}")
+
+def facilitated_server(host, port, command_queue, server_log_callback):
+    """Runs the Facililtated P2P Server"""
+    context = create_tls_context()
+    current_dir = {"download_dir": os.getcwd()}  
+
+    host = "0.0.0.0"
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
+        server_socket.bind((host, port))
+        server_socket.listen(5)
+        server_log_callback(f"Server listening on {host}:{port}")
+        with context.wrap_socket(server_socket, server_side=True) as secure_socket:
+            while True:
+                continue
+            
+def facilitated_client(username, filename, client_log_callback, recipient_username, curr_location):
+    """Runs a Facilitated P2P file share with integrity verification"""
+    try:
+        # CHECK IF username AND recipient_username ARE FRIENDS
+        client_log_callback("[CLIENT][AUTHSERVER] Checking to see if users are friends with each other...")
+        response = send_to_server("CHECK-FRIENDS", username, recipient_username, None, None, None, None)
+
+        if response != "CHECK-FRIENDS SUCCESS":
+            client_log_callback("[CLIENT][AUTHSERVER] Invalid response from server")
+            return
+        client_log_callback("[CLIENT][AUTHSERVER] Users are friends!")
+
+        # CHECK IF USER SETTINGS ALLOWS A FILE SEND
+        client_log_callback("[CLIENT][AUTHSERVER] Checking user settings...")
+        response = send_to_server("GET-SETTINGS", recipient_username, None, None, None, None, None)
+        header, flag, *settings = response.split()
+        json_str = ''.join(settings)
+        data = json.loads(json_str)
+        path = Path(filename)
+        file_size = path.stat().st_size
+        gb = file_size / (1024 ** 3)
+        file_extension = path.suffix
+        
+        if not (gb < data["max_size"]):
+            client_log_callback("[CLIENT][ERROR] Recipiant does not allow transfers of this size of file")
+    
+        if not (curr_location in data["locations_list"]):
+            client_log_callback("[CLIENT][ERROR] Recipient does not accept transfers from your region")
+            return
+        
+        if file_extension in data["file_extension_blacklist"]:
+            client_log_callback("[CLIENT][ERROR] Recipient does not accept files with that extension type")
+            return
+        
+        client_log_callback("[CLIENT][AUTHSERVER] Settings check complete!")
+        
+        # SEND FILE
+        client_log_callback("[CLIENT] Starting file transfer...")
+        with open(filename, "rb") as file:
+            contents = file.read()
+        
+        response = send_to_server("FACILITATE", username, recipient_username, None, None, None, contents)
+    except socket.timeout:
+        client_log_callback("Connection timed out. The recipient might be offline or unreachable.")
+    except ConnectionRefusedError:
+        client_log_callback("Connection refused. The recipient's file sharing service might not be running.")
+    except ssl.SSLError as e:
+        client_log_callback(f"SSL Error: {e}")
+
 
 def client(username, filename, client_log_callback, recipient_username):
     """Runs the P2P client to send a file with integrity verification."""
@@ -668,6 +736,7 @@ class P2PApp:
 
         # Friends List
         ctk.CTkLabel(self.file_sharing_tab, text="Friends").grid(row=0, column=1, padx=10, pady=5, sticky="w")
+        ctk.CTkButton(self.file_sharing_tab, text="Refresh", command=self.update_friends_list).grid(row=1, column=1, padx=10, pady=5, sticky="w")
         self.friends_list = ctk.CTkTextbox(self.file_sharing_tab, height=200, width=200)
         self.friends_list.grid(row=1, column=1, padx=10, pady=5)
         
@@ -758,7 +827,10 @@ class P2PApp:
 
         host, port = self.get_host_and_port()
         if host and port:
-            threading.Thread(target=server, args=(host, port, self.command_queue, self.server_log_callback), daemon=True).start()
+            if FACILITATED == True:
+                threading.Thread(target=facilitated_server, args=(host, port, self.command_queue, self.server_log_callback), daemon=True).start()
+            else:
+                threading.Thread(target=server, args=(host, port, self.command_queue, self.server_log_callback), daemon=True).start()
             self.server_log_callback(f"Server started on {host}:{port}. Files will be saved to {self.download_dir}.")
 
     def select_download_dir(self):
@@ -769,7 +841,7 @@ class P2PApp:
             self.command_queue.put(("set_download_dir", selected_dir))
             self.server_log_callback(f"Download directory set to: {self.download_dir}")
 
-    def log_import_History(username, file_path, recipient_username):
+    def log_import_History(self, username, file_path, recipient_username):
         """Logs the file import history."""
         log_entry = f"{datetime.datetime.now()} - {username} sent {file_path} to {recipient_username}\n"
     
@@ -785,8 +857,9 @@ class P2PApp:
     def select_and_send_file(self):
         """Opens a file dialog and sends the selected file."""
         recipient_username = self.to_entry.get()
-        username = self.username_entry.get()
+        username = self.user_state.username
         file_path = filedialog.askopenfilename(title="Select a File")
+        curr_location = self.get_current_location()
 
         if not recipient_username:
             messagebox.showwarning("Send File", "Please enter a recipient username.")
@@ -796,30 +869,16 @@ class P2PApp:
             messagebox.showwarning("Send File", "No file selected.")
             return
 
-        response = send_to_server("LIST-FRIENDS", self.user_state.username, None, None, None, None, None)
-
-        if "LIST-FRIENDS SUCCESS" in response:
-            try:
-                friends_json = json.loads(response.replace("LIST-FRIENDS SUCCESS ", "").replace("EOF", ""))
-                friend_usernames = {friend.get("username") for friend in friends_json}
-
-                if recipient_username not in friend_usernames:
-                    messagebox.showwarning("Send File", f"{recipient_username} is not in your friend list. Add them first.")
-                    return
-
-            except json.JSONDecodeError:
-                messagebox.showerror("Send File", "Error retrieving friend list. Try again later.")
-                return
-        else:
-            messagebox.showerror("Send File", "Failed to retrieve friend list from server.")
-            return
 
         if file_path:
             self.client_log_callback(f"Selected file: {file_path}")
             host, port = self.get_host_and_port()
             self.log_import_History(username, file_path, recipient_username)
             if host and port:
-                threading.Thread(target=client, args=(username, file_path, self.client_log_callback, recipient_username), daemon=True).start()
+                if FACILITATED == True:
+                    threading.Thread(target=facilitated_client, args=(username, file_path, self.client_log_callback, recipient_username, curr_location), daemon=True).start()
+                else:
+                    threading.Thread(target=client, args=(username, file_path, self.client_log_callback, recipient_username), daemon=True).start()
 
     def login(self):
         """Handles the login button click."""
