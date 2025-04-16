@@ -25,7 +25,7 @@ CERTFILE = "cert.pem"
 KEYFILE = "key.pem"
 AUTHCERTFILE = "authcert.pem"
 
-FACILITATED = True
+FACILITATED = False
 
 def get_ip():
     try:
