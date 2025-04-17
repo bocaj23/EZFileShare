@@ -1,8 +1,6 @@
 {
     "max_size": 10,
     "max_transfers": 1,
-    "locations_list": [
-        "US"
-    ],
+    "locations_list": [],
     "file_extension_blacklist": []
 }

@@ -231,6 +231,10 @@ def facilitated_client(username, filename, client_log_callback, recipient_userna
         file_size = path.stat().st_size
         gb = file_size / (1024 ** 3)
         file_extension = path.suffix
+
+        with open(filename, "rb") as file:
+            file_data = file.read()
+        checksum = zlib.crc32(file_data)
         
         if not (gb < data["max_size"]):
             client_log_callback("[CLIENT][ERROR] Recipiant does not allow transfers of this size of file")
@@ -250,7 +254,7 @@ def facilitated_client(username, filename, client_log_callback, recipient_userna
         with open(filename, "rb") as file:
             contents = file.read()
         
-        response = send_to_server("FACILITATE", username, recipient_username, None, None, None, contents)
+        response = send_to_server("FACILITATE", username, recipient_username, checksum, None, None, contents)
     except socket.timeout:
         client_log_callback("Connection timed out. The recipient might be offline or unreachable.")
     except ConnectionRefusedError:
