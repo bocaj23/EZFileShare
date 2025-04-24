@@ -16,6 +16,8 @@ import upnpy
 import json
 import datetime
 from pathlib import Path
+import magic
+import mimetypes
 
 
 # Constants
@@ -42,7 +44,13 @@ def send_to_server(endpoint, username, password, identifier, ip, port, settings)
     
     script_dir = os.path.dirname(os.path.abspath(__file__))
     
-    payload = f"{endpoint.upper()} {username} {password} {identifier} {ip} {port} {settings}\n"
+
+    if endpoint.upper() == "FACILITATE-DUMP":
+        filename = Path(password).name
+        payload = f"{endpoint.upper()} {username} {filename} {identifier} {ip} {port} {settings}\n"
+    else:
+        payload = f"{endpoint.upper()} {username} {password} {identifier} {ip} {port} {settings}\n"
+    print(f"{payload}")
 
     context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
 
@@ -51,12 +59,21 @@ def send_to_server(endpoint, username, password, identifier, ip, port, settings)
         with socket.create_connection((server_host, server_port)) as sock:
             with context.wrap_socket(sock, server_hostname="forestgardenplantshop.com") as secure_sock:
                 print("Connection established with the server.")
-                
+            
                 secure_sock.sendall(payload.encode('utf-8'))
                 print("Payload sent to server.")
 
-                response = secure_sock.recv(BUFFER_SIZE).decode('utf-8', errors='ignore')
-                print("Response received from server:", response)
+                if endpoint.upper() == "FACILITATE-DUMP":
+                    # Receive raw bytes
+                    response = secure_sock.recv(BUFFER_SIZE)
+                    
+                    print(f"{response}")
+                    response = secure_sock.recv(BUFFER_SIZE)
+                    print(f"{response}")
+                else:
+                    # Default: receive as text
+                    response = secure_sock.recv(BUFFER_SIZE).decode('utf-8', errors='ignore')
+                    print("Text response received from server:", response)
 
                 secure_sock.shutdown(socket.SHUT_RDWR)
                 secure_sock.close()
@@ -193,21 +210,37 @@ def handle_client_cert_exchange(conn, addr, current_dir, log_callback):
         except Exception as e:
             log_callback(f"Error closing connection: {e}")
 
-def facilitated_server(host, port, command_queue, server_log_callback):
-    """Runs the Facililtated P2P Server"""
-    context = create_tls_context()
-    current_dir = {"download_dir": os.getcwd()}  
+def get_extension_from_mime(data: bytes) -> str:
+    mime = magic.from_buffer(data, mime=True)
+    ext = mimetypes.guess_extension(mime)
+    if ext:
+        return ext.lstrip('.')  # remove leading dot
+    return 'bin'
 
-    host = "0.0.0.0"
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
-        server_socket.bind((host, port))
-        server_socket.listen(5)
-        server_log_callback(f"Server listening on {host}:{port}")
-        with context.wrap_socket(server_socket, server_side=True) as secure_socket:
-            conn, addr = secure_socket.accept()
-            while True:
-                data = conn.recv(BUFFER_SIZE)
-                print(data)
+def facilitated_server(host, port, command_queue, server_log_callback, username):
+    """Runs the Facililtated P2P Server"""
+    try:
+        response = send_to_server("FACILITATE-RECEIVE", username, None, None, None, None, None)
+        server_log_callback("Received response from server")
+
+
+        ext = get_extension_from_mime(response)
+        print(f"{ext}")
+        
+        timestamp = datetime.datetime.now().strftime("%m_%d_%Y_%H_%M_%S")
+        filename = f"facilitated_file_transfer_{timestamp}"
+
+        with open(filename, "wb") as file:
+            file.write(response)
+
+        server_log_callback(f"File saved to {filename}")
+
+    except socket.timeout:
+        server_log_callback("Connection timed out. The recipient might be offline or unreachable.")
+    except ConnectionRefusedError:
+        server_log_callback("Connection refused. The recipient's file sharing service might not be running.")
+    except ssl.SSLError as e:
+        server_log_callback(f"SSL Error: {e}")
             
 def facilitated_client(username, filename, client_log_callback, recipient_username, curr_location):
     """Runs a Facilitated P2P file share with integrity verification"""
@@ -251,10 +284,15 @@ def facilitated_client(username, filename, client_log_callback, recipient_userna
         
         # SEND FILE
         client_log_callback("[CLIENT] Starting file transfer...")
+
+        
+        #response = send_to_server("FACILITATE-META", username, recipient_username, checksum, path.name, file_extension, None)
+        client_log_callback(response)
+
         with open(filename, "rb") as file:
             contents = file.read()
-        
-        response = send_to_server("FACILITATE", username, recipient_username, checksum, None, None, contents)
+
+        response = send_to_server("FACILITATE-DUMP", username, filename, None, None, None, None)
     except socket.timeout:
         client_log_callback("Connection timed out. The recipient might be offline or unreachable.")
     except ConnectionRefusedError:
@@ -829,15 +867,13 @@ class P2PApp:
         self.server_log_callback(f"Default gateway: {dg}")
 
         f_port = 65432
-        forwarding_result = setup_port_forwarding(f_port, dg)
-        self.server_log_callback(forwarding_result)
+        #forwarding_result = setup_port_forwarding(f_port, dg)
+        #elf.server_log_callback(forwarding_result)
 
         host, port = self.get_host_and_port()
+        print(f"{host} {port}")
         if host and port:
-            if FACILITATED == True:
-                threading.Thread(target=facilitated_server, args=(host, port, self.command_queue, self.server_log_callback), daemon=True).start()
-            else:
-                threading.Thread(target=server, args=(host, port, self.command_queue, self.server_log_callback), daemon=True).start()
+            threading.Thread(target=server, args=(host, port, self.command_queue, self.server_log_callback), daemon=True).start()
             self.server_log_callback(f"Server started on {host}:{port}. Files will be saved to {self.download_dir}.")
 
     def select_download_dir(self):
