@@ -9,9 +9,14 @@ import zlib
 import secrets
 import string
 import stat
-from dataclasses import dataclass
+from dataclasses import dataclass 
+from dataclasses import asdict
 import requests
 import upnpy
+import json
+import datetime
+from pathlib import Path
+
 
 
 # Constants
@@ -21,6 +26,8 @@ CERTFILE = "cert.pem"
 KEYFILE = "key.pem"
 AUTHCERTFILE = "authcert.pem"
 
+FACILITATED = False
+
 def get_ip():
     try:
         response = requests.get("http://api.ipify.org", timeout=5)
@@ -29,28 +36,43 @@ def get_ip():
     except requests.RequestException as e:
         return f"Unable to fetch public ip: {e}"
 
-def send_to_server(endpoint, username, password, identifier, ip, port):
+def send_to_server(endpoint, username, password, identifier, ip, port, settings):
     """Sends data to the remote server securely using an SSL socket."""
     server_host = "50.19.225.62"
     server_port = 6223
     
     script_dir = os.path.dirname(os.path.abspath(__file__))
     
-    payload = f"{endpoint.upper()} {username} {password} {identifier} {ip} {port}\n"
 
-    context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH, cafile=AUTHCERTFILE)
+    if endpoint.upper() == "FACILITATE-DUMP":
+        filename = Path(password).name
+        payload = f"{endpoint.upper()} {username} {filename} {identifier} {ip} {port} {settings}\n"
+    else:
+        payload = f"{endpoint.upper()} {username} {password} {identifier} {ip} {port} {settings}\n"
+    print(f"{payload}")
+
+    context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
 
     #client only sends one message and server sends one message back
     try:
         with socket.create_connection((server_host, server_port)) as sock:
-            with context.wrap_socket(sock, server_hostname=server_host) as secure_sock:
+            with context.wrap_socket(sock, server_hostname="forestgardenplantshop.com") as secure_sock:
                 print("Connection established with the server.")
-                
+            
                 secure_sock.sendall(payload.encode('utf-8'))
                 print("Payload sent to server.")
 
-                response = secure_sock.recv(BUFFER_SIZE).decode('utf-8', errors='ignore')
-                print("Response received from server:", response)
+                if endpoint.upper() == "FACILITATE-DUMP":
+                    # Receive raw bytes
+                    response = secure_sock.recv(BUFFER_SIZE)
+                    
+                    print(f"{response}")
+                    response = secure_sock.recv(BUFFER_SIZE)
+                    print(f"{response}")
+                else:
+                    # Default: receive as text
+                    response = secure_sock.recv(BUFFER_SIZE).decode('utf-8', errors='ignore')
+                    print("Text response received from server:", response)
 
                 secure_sock.shutdown(socket.SHUT_RDWR)
                 secure_sock.close()
@@ -63,8 +85,6 @@ def send_to_server(endpoint, username, password, identifier, ip, port):
     except Exception as e:
         print(f"Client error: {e}")
         return f"Error: {e}"
-
-
 
 
 def create_tls_context():
@@ -189,12 +209,97 @@ def handle_client_cert_exchange(conn, addr, current_dir, log_callback):
         except Exception as e:
             log_callback(f"Error closing connection: {e}")
 
+
+def facilitated_server(host, port, command_queue, server_log_callback, username):
+    """Runs the Facililtated P2P Server"""
+    try:
+        response = send_to_server("FACILITATE-RECEIVE", username, None, None, None, None, None)
+        server_log_callback("Received response from server")
+
+
+        ext = (response)
+        print(f"{ext}")
+        
+        timestamp = datetime.datetime.now().strftime("%m_%d_%Y_%H_%M_%S")
+        filename = f"facilitated_file_transfer_{timestamp}"
+
+        with open(filename, "wb") as file:
+            file.write(response)
+
+        server_log_callback(f"File saved to {filename}")
+
+    except socket.timeout:
+        server_log_callback("Connection timed out. The recipient might be offline or unreachable.")
+    except ConnectionRefusedError:
+        server_log_callback("Connection refused. The recipient's file sharing service might not be running.")
+    except ssl.SSLError as e:
+        server_log_callback(f"SSL Error: {e}")
+            
+def facilitated_client(username, filename, client_log_callback, recipient_username, curr_location):
+    """Runs a Facilitated P2P file share with integrity verification"""
+    try:
+        # CHECK IF username AND recipient_username ARE FRIENDS
+        client_log_callback("[CLIENT][AUTHSERVER] Checking to see if users are friends with each other...")
+        response = send_to_server("CHECK-FRIENDS", username, recipient_username, None, None, None, None)
+
+        if response != "CHECK-FRIENDS SUCCESS":
+            client_log_callback("[CLIENT][AUTHSERVER] Invalid response from server")
+            return
+        client_log_callback("[CLIENT][AUTHSERVER] Users are friends!")
+
+        # CHECK IF USER SETTINGS ALLOWS A FILE SEND
+        client_log_callback("[CLIENT][AUTHSERVER] Checking user settings...")
+        response = send_to_server("GET-SETTINGS", recipient_username, None, None, None, None, None)
+        header, flag, *settings = response.split()
+        json_str = ''.join(settings)
+        data = json.loads(json_str)
+        path = Path(filename)
+        file_size = path.stat().st_size
+        gb = file_size / (1024 ** 3)
+        file_extension = path.suffix
+
+        with open(filename, "rb") as file:
+            file_data = file.read()
+        checksum = zlib.crc32(file_data)
+        
+        if not (gb < data["max_size"]):
+            client_log_callback("[CLIENT][ERROR] Recipiant does not allow transfers of this size of file")
+    
+        if not (curr_location in data["locations_list"]):
+            client_log_callback("[CLIENT][ERROR] Recipient does not accept transfers from your region")
+            return
+        
+        if file_extension in data["file_extension_blacklist"]:
+            client_log_callback("[CLIENT][ERROR] Recipient does not accept files with that extension type")
+            return
+        
+        client_log_callback("[CLIENT][AUTHSERVER] Settings check complete!")
+        
+        # SEND FILE
+        client_log_callback("[CLIENT] Starting file transfer...")
+
+        
+        #response = send_to_server("FACILITATE-META", username, recipient_username, checksum, path.name, file_extension, None)
+        client_log_callback(response)
+
+        with open(filename, "rb") as file:
+            contents = file.read()
+
+        response = send_to_server("FACILITATE-DUMP", username, filename, None, None, None, None)
+    except socket.timeout:
+        client_log_callback("Connection timed out. The recipient might be offline or unreachable.")
+    except ConnectionRefusedError:
+        client_log_callback("Connection refused. The recipient's file sharing service might not be running.")
+    except ssl.SSLError as e:
+        client_log_callback(f"SSL Error: {e}")
+
+
 def client(username, filename, client_log_callback, recipient_username):
     """Runs the P2P client to send a file with integrity verification."""
     try:
         # Fetch recipient information
         client_log_callback("[CLIENT][AUTH_SERVER][GET PACKET 1] Seeing if recipiant exists")
-        response = send_to_server("GET", recipient_username, None, None, None, None)
+        response = send_to_server("GET", recipient_username, None, None, None, None, None)
         client_log_callback(f"Server response: {response}")
 
         parts = response.split()
@@ -212,7 +317,7 @@ def client(username, filename, client_log_callback, recipient_username):
         recipient_port = int(parts[4])
 
         client_log_callback("[CLIENT][AUTH_SERVER][INITIATE] Sending initiate packet")
-        response = send_to_server("INITIATE", username, None, None, recipient_ip, recipient_port)
+        response = send_to_server("INITIATE", username, None, None, recipient_ip, recipient_port, None)
         client_log_callback(f"[CLIENT][AUTH_SERVER][INITATE] Response received")
 
         with open('client_cert.pem', 'w') as file:
@@ -285,6 +390,7 @@ def setup_port_forwarding(default_gateway, port, description="P2P Program"):
         
         # Discover UPnP devices
         devices = upnp.discover()
+        print(f"{devices}")
         if not devices:
             return "No UPnP devices found. Ensure UPnP is enabled on your router."
 
@@ -322,11 +428,19 @@ def setup_port_forwarding(default_gateway, port, description="P2P Program"):
         return f"Failed to forward port {port}: {e}"
 
 @dataclass
+class settings_state:
+    max_size: int = 10
+    locations_list = []
+    max_transfers: int = 1
+    file_extension_blacklist = []
+
+@dataclass
 class login_state:
     username: str = ""
     ip: str = ""
     port: int = DEFAULT_PORT
     logged_in: bool = False
+    is_using_vpn: bool = False
 
     def clear(self):
         self.username = ""
@@ -339,6 +453,7 @@ class P2PApp:
         self.root = root
         self.root.title("EZFileShare")
         self.user_state = login_state()
+        self.user_settings = settings_state()
 
         # Set appearance mode and color theme
         ctk.set_appearance_mode("dark")
@@ -351,8 +466,251 @@ class P2PApp:
         self.tabview.pack(fill="both", expand=True)
 
         self.login_tab = self.tabview.add("Login")
+        self.file_sharing_tab = self.tabview.add("File Sharing")
+        self.settings_tab = self.tabview.add("Settings")
 
         self.draw_login_tab()
+        self.tabview._segmented_button.configure(command=self.on_tab_change)
+
+    def on_tab_change(self, value=None):
+        """Handles the tab switch"""
+        if self.user_state.logged_in == False:
+            return
+
+        if value:
+            self.tabview.set(value)
+
+        selected_tab = self.tabview.get()
+
+        print(selected_tab)
+        if selected_tab == "Login":
+            self.draw_login_tab()
+        elif selected_tab == "File Sharing":
+            self.draw_file_sharing_tab()
+        elif selected_tab == "Settings":
+            self.draw_settings_tab()
+
+    def draw_settings_tab(self):
+        """Clears the settings tab and redraws widgets"""
+        # Clear previous widgets
+        for widget in self.settings_tab.winfo_children():
+            widget.destroy()
+
+        # Maximum File Size Setting
+        ctk.CTkLabel(self.settings_tab, text="Maximum Allowed File Size when receiving files:").grid(row=0, column=0, padx=10, pady=5, sticky="w")
+    
+        button_frame2 = ctk.CTkFrame(self.settings_tab)
+        button_frame2.grid(row=0, column=1, columnspan=2, padx=5, pady=5, sticky="w")
+
+        self.max_size_entry = ctk.CTkEntry(button_frame2)
+        self.max_size_entry.grid(row=0, column=0, padx=5, pady=5, sticky="w")
+    
+        ctk.CTkLabel(button_frame2, text="GB").grid(row=0, column=1, padx=5, pady=5, sticky="w") 
+    
+        self.max_size_entry.insert(0, "10")
+
+        self.update_settings_button = ctk.CTkButton(button_frame2, text="Update Settings", width=80, command=self.update_settings)
+        self.update_settings_button.grid(row=0, column=3, padx=5, pady=5, sticky="w")
+
+        # IP Geofiltering Buttons
+        ctk.CTkLabel(self.settings_tab, text="IP Geofiltering:").grid(row=1, column=0, padx=10, pady=5, sticky="w")
+
+        button_frame = ctk.CTkFrame(self.settings_tab)
+        button_frame.grid(row=1, column=1, columnspan=4, padx=5, pady=5, sticky="w")
+    
+        ctk.CTkLabel(button_frame, text="Current Location:").grid(row=0, column=2, padx=5, pady=5)  
+    
+        self.current_place_entry = ctk.CTkEntry(button_frame)
+        self.current_place_entry.grid(row=0, column=3, padx=5, pady=5)  
+    
+        self.current_place_entry.insert(0, self.get_current_location())
+        self.current_place_entry.configure(state="readonly")
+
+        # Location blacklist
+        button_frame4 = ctk.CTkFrame(self.settings_tab)
+        button_frame4.grid(row=2, column=1, columnspan=3, padx=5, pady=5, sticky="w")  
+
+        ctk.CTkLabel(button_frame4, text="Add/remove place to list:").grid(row=0, column=0, padx=10, pady=5, sticky="w")
+
+        self.location_entry = ctk.CTkEntry(button_frame4)
+        self.location_entry.grid(row=0, column=1, padx=5, pady=5) 
+    
+        self.add_location_button = ctk.CTkButton(button_frame4, text="Add", width=80, command=self.add_location)
+        self.add_location_button.grid(row=0, column=2, padx=5, pady=5) 
+
+        self.remove_location_button = ctk.CTkButton(button_frame4, text="Remove", width=80, command=self.remove_location)
+        self.remove_location_button.grid(row=0, column=3, padx=5, pady=5) 
+
+        self.location_list = ctk.CTkTextbox(self.settings_tab, height=200, width=400)
+        self.location_list.grid(row=3, column=1, padx=10, pady=5)
+
+        # Maximum Transfers Setting
+        ctk.CTkLabel(self.settings_tab, text="Maximum number of incoming transfers at a time:").grid(row=4, column=0, padx=10, pady=5, sticky="w")
+    
+        self.max_transfers_entry = ctk.CTkEntry(self.settings_tab)
+        self.max_transfers_entry.grid(row=4, column=1, padx=10, pady=5, sticky="w")
+    
+        self.max_transfers_entry.insert(0, "1")
+
+        # Blacklisted file extensions
+        ctk.CTkLabel(self.settings_tab, text="Blacklisted file extensions:").grid(row=5, column=0, padx=10, pady=5, sticky="w")
+
+        button_frame3 = ctk.CTkFrame(self.settings_tab)
+        button_frame3.grid(row=5, column=1, columnspan=3, padx=5, pady=5, sticky="w")
+
+        self.blacklisted_extenstions_entry = ctk.CTkEntry(button_frame3)
+        self.blacklisted_extenstions_entry.grid(row=0, column=0, padx=5, pady=5) 
+
+        self.add_extension_button = ctk.CTkButton(button_frame3, text="Add", width=80, command=self.add_extension)
+        self.add_extension_button.grid(row=0, column=1, padx=5, pady=5)  
+
+        self.remove_extension_button = ctk.CTkButton(button_frame3, text="Remove", width=80, command=self.remove_extension)
+        self.remove_extension_button.grid(row=0, column=2, padx=5, pady=5)  
+
+        self.extensions_list = ctk.CTkTextbox(self.settings_tab, height=200, width=400)
+        self.extensions_list.grid(row=6, column=1, padx=10, pady=5)
+        self.update_extensions_list()
+        self.apply_settings_to_ui()
+
+
+    def update_settings(self):
+        try:
+            self.user_settings.max_size = int(self.max_size_entry.get())
+            self.user_settings.max_transfers = int(self.max_transfers_entry.get())
+
+            # Update locations list
+            locations = self.location_list.get("1.0", "end").strip().split("\n")
+            self.user_settings.locations_list = [loc for loc in locations if loc]
+
+            # Update file extensions list
+            extensions = self.extensions_list.get("1.0", "end").strip().split("\n")
+            self.user_settings.file_extension_blacklist = [ext for ext in extensions if ext]
+
+            # Export settings to JSON
+            self.export_settings()
+            settings_dict = {
+                "max_size": self.user_settings.max_size,
+                "locations_list": list(self.user_settings.locations_list),
+                "max_transfers": self.user_settings.max_transfers,
+                "file_extension_blacklist": list(self.user_settings.file_extension_blacklist)
+            }
+            response = send_to_server("UPDATE-SETTINGS", self.user_state.username, None, None, None, None, settings_dict)
+            response = response.strip()
+
+            if "UPDATE-SETTINGS SUCCESS" in response:
+                messagebox.showinfo("Settings", "Settings updated successfully")
+
+            messagebox.showinfo("Settings", "Settings updated successfully.")
+        except ValueError:
+            messagebox.showerror("Error", "Max size and max transfers must be numbers.")
+        except Exception as e:
+            messagebox.showerror("Error", f"Unexpected error updating settings: {e}")
+
+    def export_settings(self):
+        """Exports user settings to a json file"""
+        try:
+            # Convert dataclass to a dictionary
+            settings_dict = {
+                "max_size": self.user_settings.max_size,
+                "locations_list": list(self.user_settings.locations_list),
+                "max_transfers": self.user_settings.max_transfers,
+                "file_extension_blacklist": list(self.user_settings.file_extension_blacklist)
+            }
+
+            print(settings_dict)
+
+            # Ensure directory exists
+            os.makedirs("bin", exist_ok=True)
+
+            with open("bin/user_settings.json", "w", encoding="utf-8") as json_file:
+                json.dump(settings_dict, json_file, indent=4)
+
+            print("User settings exported successfully.")
+
+        except Exception as e:
+            print(f"Error exporting user settings: {e}")
+
+    def add_location(self):
+        """Adds a location to the blacklist and updates the GUI"""
+        value = self.location_entry.get().strip()
+        if not value:
+            messagebox.showwarning("Settings", "Nothing happened. No location entered.")
+
+        if value in self.user_settings.locations_list:
+            messagebox.showwarning("Settings", "Location is already in the list.")
+            return
+    
+        self.user_settings.locations_list.append(value)
+        self.update_locations_list()
+        self.location_entry.delete(0, "end")
+
+    def remove_location(self):
+        """Removes a location from the list and updates the GUI"""
+        value = self.location_entry.get().strip()
+        if not value:
+            messagebox.showwarning("Settings", "Nothing happened")
+
+        if value in self.user_settings.locations_list:
+            self.user_settings.locations_list.remove(value)
+            self.update_locations_list()
+            self.location_entry.delete(0, "end")
+        else:
+            messagebox.showinfo("Settings", "Location not found in the list.")
+
+    def update_locations_list(self):    
+        """Updates the GUI of the locations list"""
+        self.location_list.configure(state="normal")
+        self.location_list.delete("1.0", "end")
+        for location in self.user_settings.locations_list:
+            self.location_list.insert("end", location + "\n")
+        self.location_list.configure(state="disabled")
+
+    def get_current_location(self):
+        """Gets current location. Returns country not IP"""
+        try:
+            response = requests.get("https://ipinfo.io/json", timeout=5)
+            response.raise_for_status()
+            data = response.json()
+            country = data.get("country", "Unknown/Error")
+
+            return country
+        except requests.RequestException as e:
+            return f"Unable to fetch location: {e}"
+
+    def add_extension(self):
+        """Adds an extension to the blacklist and updates the GUI"""
+        value = self.blacklisted_extenstions_entry.get().strip()
+        if not value:
+            messagebox.showwarning("Settings", "Nothing happened")
+
+        if value in self.user_settings.file_extension_blacklist:
+            messagebox.showwarning("Settings", "Extension is already in blacklist")
+            return
+        
+        self.user_settings.file_extension_blacklist.append(value)
+        self.update_extensions_list()
+        self.blacklisted_extenstions_entry.delete(0, "end")
+
+    def remove_extension(self):
+        """Removes and extension from the blacklist and upadtes the GUI"""
+        value = self.blacklisted_extenstions_entry.get().strip()
+        if not value:
+            messagebox.showwarning("Settings", "Nothing happened")
+
+        if value in self.user_settings.file_extension_blacklist:
+            self.user_settings.file_extension_blacklist.remove(value)
+            self.update_extensions_list()
+            self.blacklisted_extenstions_entry.delete(0, "end")
+        else:
+            messagebox.showinfo("Settings", "Nothing happened")
+
+    def update_extensions_list(self):
+        """Updates the GUI that shows the blacklisted extensions"""
+        self.extensions_list.configure(state="normal")
+        self.extensions_list.delete("1.0", "end")
+        for extension in self.user_settings.file_extension_blacklist:
+            self.extensions_list.insert("end", extension+"\n")
+        self.extensions_list.configure(state="disabled")
 
     def draw_login_tab(self):
         for widget in self.login_tab.winfo_children():
@@ -376,15 +734,15 @@ class P2PApp:
         if self.user_state.logged_in == False:
             self.register_button = ctk.CTkButton(self.login_tab, text="Register", command=self.register)
             self.register_button.grid(row=5, column=2, padx=10, pady=5, sticky="w")
-            
+
         # Logout Section
-        self.logout_button = ctk.CTkButton(self.login_tab, text="Logout", command=self.logout)
-        self.logout_button.grid(row=6, column=2, padx=10, pady=5, sticky="w")
+        if self.user_state.logged_in == True:
+            self.logout_button = ctk.CTkButton(self.login_tab, text="Logout", command=self.logout)
+            self.logout_button.grid(row=6, column=2, padx=10, pady=5, sticky="w")
 
         # Port Configuration
         ctk.CTkLabel(self.login_tab, text="Port:").grid(row=6, column=0, padx=10, pady=5, sticky="e")
         self.port_entry = ctk.CTkEntry(self.login_tab)
-        
         self.port_entry.insert(0, str(DEFAULT_PORT))
         self.port_entry.grid(row=6, column=1, padx=10, pady=5, sticky="w")
 
@@ -398,72 +756,9 @@ class P2PApp:
         self.server_log.grid(row=1, column=0, padx=10, pady=5)
         if self.user_state.logged_in == True:
             ctk.CTkButton(self.file_sharing_tab, text="Start", command=self.start_server).grid(row=2, column=0, padx=10, pady=5)
-            ctk.CTkButton(self.file_sharing_tab, text="Select Download Directory", command=self.select_download_dir).grid(row=3, column=0, padx=10, pady=5)
+        ctk.CTkButton(self.file_sharing_tab, text="Select Download Directory", command=self.select_download_dir).grid(row=3, column=0, padx=10, pady=5)
 
-            # Show friends list when logged in
-            friends_frame = ctk.CTkFrame(self.file_sharing_tab, fg_color="gray10")
-            friends_frame.grid(row=8, column=0, columnspan=4, padx=10, pady=5, sticky="nsew")
-            
-            # Create header label
-            header = ctk.CTkLabel(friends_frame, text="Friends List", font=("Arial", 16, "bold"))
-            header.pack(padx=10, pady=(10,5))
-
-            # Add search bar
-            search_frame = ctk.CTkFrame(friends_frame)
-            search_frame.pack(fill="x", padx=10, pady=5)
-            
-            search_entry = ctk.CTkEntry(search_frame, placeholder_text="Search friends...", width=200)
-            search_entry.pack(side="left", padx=5, pady=5)
-
-            add_friend_button = ctk.CTkButton(search_frame, text="Add Friend")
-            add_friend_button.pack(side="right", padx=5, pady=5)
-            
-            add_friend_entry = ctk.CTkEntry(search_frame, placeholder_text="Enter friend's username...", width=200)
-            add_friend_entry.pack(side="right", padx=5, pady=5)
-
-            # Add example friends
-            friends = [
-                "Alice123",
-                "BobSmith",
-                "Charlie99", 
-                "Diana2024",
-                "EvanP"
-            ]
-
-            # Create a frame to hold friend entries
-            friends_list_frame = ctk.CTkFrame(friends_frame)
-            friends_list_frame.pack(fill="x", padx=10, pady=2)
-
-            def update_friends_list(*args):
-                # Clear existing friends
-                for widget in friends_list_frame.winfo_children():
-                    widget.destroy()
-                
-                search_text = search_entry.get().lower()
-                # Show only matching friends
-                for friend in friends:
-                    if search_text in friend.lower():
-                        friend_frame = ctk.CTkFrame(friends_list_frame)
-                        friend_frame.pack(fill="x", padx=10, pady=2)
-                        
-                        friend_label = ctk.CTkLabel(friend_frame, text=friend)
-                        friend_label.pack(side="left", padx=10, pady=5)
-                        
-                        select_button = ctk.CTkButton(friend_frame, text="Select", command=lambda f=friend: self.select_friend(f))
-                        select_button.pack(side="right", padx=10, pady=5)
-                        
-                        status_label = ctk.CTkLabel(friend_frame, text="Online", text_color="green")
-                        status_label.pack(side="right", padx=10, pady=5)
-
-            # Bind search entry to update function
-            search_entry.bind('<KeyRelease>', update_friends_list)
-            
-            # Initial population of friends list
-            update_friends_list()
-
-        #Friends Section
-        ctk.CTkLabel(self.file_sharing_tab, text="Friends").grid(row=4, column=0, padx=10, pady=5, sticky="w")
-
+        
         # Client Section
         ctk.CTkLabel(self.file_sharing_tab, text="Send").grid(row=0, column=2, padx=10, pady=5, sticky="w")
         self.client_log = ctk.CTkTextbox(self.file_sharing_tab, height=200, width=400)
@@ -477,8 +772,60 @@ class P2PApp:
         # Default download directory
         self.download_dir = os.getcwd()
 
-    def draw_settings_tab(self):
-        return
+        # Friends List
+        ctk.CTkLabel(self.file_sharing_tab, text="Friends").grid(row=0, column=1, padx=10, pady=5, sticky="w")
+        ctk.CTkButton(self.file_sharing_tab, text="Refresh", command=self.update_friends_list).grid(row=1, column=1, padx=10, pady=5, sticky="w")
+        self.friends_list = ctk.CTkTextbox(self.file_sharing_tab, height=200, width=200)
+        self.friends_list.grid(row=1, column=1, padx=10, pady=5)
+        
+        button_frame = ctk.CTkFrame(self.file_sharing_tab)
+        button_frame.grid(row=2, column=1, padx=10, pady=5, sticky="w")
+        
+        self.friend_entry = ctk.CTkEntry(button_frame)
+        self.friend_entry.grid(row=0, column=0, padx=5, pady=5)
+        ctk.CTkButton(button_frame, text="Add", command=self.add_friend).grid(row=0, column=1, padx=5, pady=5)
+        ctk.CTkButton(button_frame, text="Remove", command=self.remove_friend).grid(row=0, column=2, padx=5, pady=5)
+        ctk.CTkLabel(self.file_sharing_tab, text="PENDING requests can be accepted by entering the username of the requester and hitting Add").grid(row=3, column=1, padx=5, pady=5)
+        self.update_friends_list()
+    
+    def add_friend(self):
+        """Sends a friend request to the server."""
+        friend_username = self.friend_entry.get().strip()
+    
+        if not friend_username:
+            messagebox.showwarning("Friend Request", "Please enter a username to send a friend request.")
+            return
+    
+        if friend_username == self.user_state.username:
+            messagebox.showwarning("Friend Request", "You cannot add yourself as a friend.")
+            return
+
+        response = send_to_server("SEND-FRIEND", self.user_state.username, None, None, None, None, friend_username)
+
+        if "ACCEPT-FRIEND SUCCESS" in response:
+            messagebox.showinfo("Friend Request", f"Friend request sent to {friend_username}.")
+        self.update_friends_list()
+
+    def remove_friend(self):
+        """Removes a friend from the friend list."""
+        friend_username = self.friend_entry.get().strip()
+
+        if not friend_username:
+            messagebox.showwarning("Remove Friend", "Please enter a username to remove from your friends list.")
+            return
+
+        if friend_username == self.user_state.username:
+            messagebox.showwarning("Remove Friend", "You cannot remove yourself.")
+            return
+
+        response = send_to_server("REMOVE-FRIEND", self.user_state.username, None, None, None, None, friend_username)
+
+        if "REMOVE-FRIEND SUCCESS" in response:
+            messagebox.showinfo("Remove Friend", f"{friend_username} has been removed from your friends list.")
+        else:
+            messagebox.showerror("Remove Friend", response)
+        self.update_friends_list()
+
 
     def log_message(self, widget, message):
         """Logs a message to a specific Text widget."""
@@ -497,7 +844,7 @@ class P2PApp:
 
     def get_host_and_port(self):
         """Gets the host and port from the GUI input fields."""
-        host = self.host_entry.get()
+        host = get_ip()
         try:
             port = int(self.port_entry.get())
             if port < 1 or port > 65535:
@@ -513,10 +860,11 @@ class P2PApp:
         self.server_log_callback(f"Default gateway: {dg}")
 
         f_port = 65432
-        forwarding_result = setup_port_forwarding(f_port, dg)
-        self.server_log_callback(forwarding_result)
+        #forwarding_result = setup_port_forwarding(f_port, dg)
+        #elf.server_log_callback(forwarding_result)
 
         host, port = self.get_host_and_port()
+        print(f"{host} {port}")
         if host and port:
             threading.Thread(target=server, args=(host, port, self.command_queue, self.server_log_callback), daemon=True).start()
             self.server_log_callback(f"Server started on {host}:{port}. Files will be saved to {self.download_dir}.")
@@ -529,16 +877,44 @@ class P2PApp:
             self.command_queue.put(("set_download_dir", selected_dir))
             self.server_log_callback(f"Download directory set to: {self.download_dir}")
 
+    def log_import_History(self, username, file_path, recipient_username):
+        """Logs the file import history."""
+        log_entry = f"{datetime.datetime.now()} - {username} sent {file_path} to {recipient_username}\n"
+    
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        log_file = os.path.join(script_dir, "file_import_log.txt")
+
+        try:
+            with open(log_file, "a") as f:
+                f.write(log_entry)
+        except Exception as e:
+            print(f"Error logging file import: {e}")
+
     def select_and_send_file(self):
         """Opens a file dialog and sends the selected file."""
-        recipiant_username = self.to_entry.get()
-        username = self.username_entry.get()
+        recipient_username = self.to_entry.get()
+        username = self.user_state.username
         file_path = filedialog.askopenfilename(title="Select a File")
+        curr_location = self.get_current_location()
+
+        if not recipient_username:
+            messagebox.showwarning("Send File", "Please enter a recipient username.")
+            return
+
+        if not file_path:
+            messagebox.showwarning("Send File", "No file selected.")
+            return
+
+
         if file_path:
             self.client_log_callback(f"Selected file: {file_path}")
             host, port = self.get_host_and_port()
+            self.log_import_History(username, file_path, recipient_username)
             if host and port:
-                threading.Thread(target=client, args=(username, file_path, self.client_log_callback, recipiant_username), daemon=True).start()
+                if FACILITATED == True:
+                    threading.Thread(target=facilitated_client, args=(username, file_path, self.client_log_callback, recipient_username, curr_location), daemon=True).start()
+                else:
+                    threading.Thread(target=client, args=(username, file_path, self.client_log_callback, recipient_username), daemon=True).start()
 
     def login(self):
         """Handles the login button click."""
@@ -564,7 +940,7 @@ class P2PApp:
             if not key_string:
                 raise ValueError("The identifier.pem file is empty or corrupted.")
 
-            response = send_to_server("LOGIN", username, password, key_string, ip, port)
+            response = send_to_server("LOGIN", username, password, key_string, ip, port, None)
 
             messagebox.showinfo("Login Response", response)
 
@@ -574,10 +950,31 @@ class P2PApp:
                 self.user_state.username = username
                 self.user_state.port = port
                 self.user_state.logged_in = True
-                self.file_sharing_tab = self.tabview.add("File Sharing")
-                self.settings_tab = self.tabview.add("Settings")
                 self.tabview.set("File Sharing")
                 self.draw_file_sharing_tab()
+
+                settings_response = send_to_server("GET-SETTINGS", username, None, None, None, None, None)
+
+                if "GET-SETTINGS SUCCESS" in settings_response:
+                    try:
+                        settings_json = json.loads(settings_response.replace("GET-SETTINGS SUCCESS ", "").replace("EOF", ""))
+                    
+                        with open("bin/user_settings.json", "w", encoding="utf-8") as json_file:
+                            json.dump(settings_json, json_file, indent=4)
+
+                        print("User settings successfully updated from server.")
+
+                        self.user_settings.max_size = settings_json.get("max_size", 10)
+                        self.user_settings.locations_list = settings_json.get("locations_list", [])
+                        self.user_settings.max_transfers = settings_json.get("max_transfers", 1)
+                        self.user_settings.file_extension_blacklist = settings_json.get("file_extension_blacklist", [])
+
+                    except json.JSONDecodeError:
+                        print("Error: Received invalid settings data.")
+                else:
+                    print("Error retrieving settings:", settings_response)
+
+                self.update_friends_list()
 
         except FileNotFoundError as e:
             messagebox.showerror("Error", f"File Error: {e}")
@@ -586,9 +983,58 @@ class P2PApp:
         except Exception as e:
             messagebox.showerror("Error", f"An unexpected error occurred: {e}")
 
+    def update_friends_list(self):
+        """Fetches the friends list from the server and updates the UI."""
+        response = send_to_server("LIST-FRIENDS", self.user_state.username, None, None, None, None, None)
+
+        if "LIST-FRIENDS EMPTY" in response:
+            self.friends_list.configure(state="normal")
+            self.friends_list.delete("1.0", "end")
+            self.friends_list.insert("end", "No friends found.\n")
+            self.friends_list.configure(state="disabled")
+            return
+
+        if "LIST-FRIENDS SUCCESS" in response:
+            try:
+                friends_json = json.loads(response.replace("LIST-FRIENDS SUCCESS ", "").replace("EOF", ""))
+                self.friends_list.configure(state="normal")
+                self.friends_list.delete("1.0", "end")
+
+                for friend in friends_json:
+                    username = friend.get("username")
+                    status = friend.get("status")
+                    self.friends_list.insert("end", f"{username} - {status}\n")
+
+                self.friends_list.configure(state="disabled")
+            except json.JSONDecodeError:
+                print("Error: Received invalid friends list data.")
+        else:
+            print("Error retrieving friends list:", response)
+
+    def apply_settings_to_ui(self):
+        """Updates the UI elements with the latest settings from self.user_settings."""
+        self.max_size_entry.delete(0, "end")
+        self.max_size_entry.insert(0, str(self.user_settings.max_size))
+
+        self.max_transfers_entry.delete(0, "end")
+        self.max_transfers_entry.insert(0, str(self.user_settings.max_transfers))
+
+        self.location_list.configure(state="normal")
+        self.location_list.delete("1.0", "end")
+        for location in self.user_settings.locations_list:
+            self.location_list.insert("end", location + "\n")
+        self.location_list.configure(state="disabled")
+
+        self.extensions_list.configure(state="normal")
+        self.extensions_list.delete("1.0", "end")
+        for ext in self.user_settings.file_extension_blacklist:
+            self.extensions_list.insert("end", ext + "\n")
+        self.extensions_list.configure(state="disabled")
+
     def register(self):
         """Handles the register button click with secure key generation."""
         username = self.username_entry.get()
+        self.export_settings()
 
         if len(username) > 16:
             raise ValueError("Username cannot be longer than 16 characters")
@@ -596,6 +1042,7 @@ class P2PApp:
         password = self.password_entry.get()
         ip = get_ip()
         port = self.port_entry.get()
+        
 
         script_dir = os.path.dirname(os.path.abspath(__file__))
         identifier_file = os.path.join(script_dir, "identifier.pem")
@@ -610,11 +1057,22 @@ class P2PApp:
             with open(identifier_file, "w") as f:
                 f.write(random_string)
 
+            try:
+                with open("bin/user_settings.json", "r", encoding="utf-8") as json_file:
+                    json_data = json.load(json_file)
+                    json_string = json.dumps(json_data)
+            except FileNotFoundError:
+                print("Error: JSON file not found")
+                return
+            except json.JSONDecodeError:
+                print("Error: Json file error")
+                return
+
             os.chmod(identifier_file, stat.S_IRUSR | stat.S_IWUSR)
 
             messagebox.showinfo("Key File Generated", "A new identifier.pem file has been created.")
 
-            response = send_to_server("REGISTER", username, password, random_string, ip, port)
+            response = send_to_server("REGISTER", username, password, random_string, ip, port, json_string)
 
             messagebox.showinfo("Register Response", response)
 
