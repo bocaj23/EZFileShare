@@ -16,7 +16,9 @@ Then hit register. It will say that an identifier.pem file has been created. Thi
 This is by design as these accounts are meant to be disposable. If you lose your identifier.pem, you can re-register. The only thing you would have to change
 is your settings.
 
-Sending a file is very easy, you type in the desired name into the "To: " box and then hit "Select & Send." Once the file is
+Sending a file is very easy, first though you must add a user as a friend. YOU MUST BE FRIENDS WITH A USER TO SEND A FILE! For this you simply type the target user's username into the textbox under the friends list and hit the "Add" button. This will send a friend request to the user. The user must then type the username of the requester and hit the "Add" button to accept it. Now two users will be friends.
+
+From here, you type in the desired name into the "To: " box and then hit "Select & Send." Once the file is
 selected the client will attempt to send a file.
 
 Receiving is a bit trickier. For one you must port forward traffic from port 65432 (or the port you select) to your computer. At which point
