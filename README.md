@@ -21,5 +21,4 @@ Sending a file is very easy, first though you must add a user as a friend. YOU M
 From here, you type in the desired name into the "To: " box and then hit "Select & Send." Once the file is
 selected the client will attempt to send a file.
 
-Receiving is a bit trickier. For one you must port forward traffic from port 65432 (or the port you select) to your computer. At which point
-you will be able to receive files. All you do is it start server.
+Receiving is a bit trickier. For one you must port forward traffic from port 65432 (or the port you select) to your computer. There also needs to be a rule in your firewall to accept incoming connections on that same port. At which point you will be able to receive files. All you do is it start server.
